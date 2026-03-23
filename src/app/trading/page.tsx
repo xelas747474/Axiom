@@ -196,15 +196,15 @@ export default function TradingPage() {
 
           {/* Chart */}
           <div className="relative min-h-[500px]">
-            {loading && candles.length === 0 && (
-              <div className="absolute inset-0 flex items-center justify-center z-10">
+            {loading && (
+              <div className="absolute inset-0 flex items-center justify-center z-10 bg-[var(--color-bg-card)]/60">
                 <div className="flex flex-col items-center gap-3">
                   <div className="h-8 w-8 animate-spin rounded-full border-2 border-[var(--color-accent-blue)]/30 border-t-[var(--color-accent-blue)]" />
-                  <span className="text-xs text-[var(--color-text-muted)]">Chargement des données Binance...</span>
+                  <span className="text-xs text-[var(--color-text-muted)]">Chargement {selectedCrypto.label} {selectedTimeframe}...</span>
                 </div>
               </div>
             )}
-            {error && (
+            {error && !loading && (
               <div className="absolute inset-0 flex items-center justify-center z-10">
                 <div className="text-center">
                   <p className="text-sm text-[var(--color-negative)]">{error}</p>
@@ -216,7 +216,12 @@ export default function TradingPage() {
               </div>
             )}
             {candles.length > 0 && (
-              <TradingChart candles={candles} signal={signal ?? undefined} height={500} />
+              <TradingChart
+                key={`${selectedSymbol}-${selectedTimeframe}`}
+                candles={candles}
+                signal={signal ?? undefined}
+                height={500}
+              />
             )}
           </div>
         </Card>
