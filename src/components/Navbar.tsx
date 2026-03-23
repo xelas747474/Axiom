@@ -7,6 +7,7 @@ import AuthModal from "./AuthModal";
 
 const navLinks = [
   { href: "/dashboard", label: "Dashboard" },
+  { href: "/trading", label: "Trading" },
   { href: "/ai-insights", label: "AI Insights" },
   { href: "/alerts", label: "Alerts" },
   { href: "/settings", label: "Settings" },
@@ -18,7 +19,7 @@ export default function Navbar() {
 
   return (
     <nav className="sticky top-0 z-50 border-b border-[var(--color-border-subtle)]/50 glass">
-      <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-3 sm:px-6">
+      <div className="mx-auto flex max-w-[1600px] items-center justify-between px-4 py-3 sm:px-6">
         <Link
           href="/dashboard"
           className="flex items-center gap-2.5 group transition-transform duration-300 hover:scale-105"
