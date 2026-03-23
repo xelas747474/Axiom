@@ -13,10 +13,8 @@ export default function Card({
 }: CardProps) {
   return (
     <div
-      className={`rounded-2xl border border-[var(--color-border-subtle)] bg-[var(--color-bg-card)] p-6 shadow-lg shadow-black/20 transition-colors hover:bg-[var(--color-bg-card-hover)] ${
-        highlight
-          ? "border-[var(--color-accent-blue)]/30 shadow-[var(--color-accent-blue)]/5"
-          : ""
+      className={`card-premium rounded-2xl border border-[var(--color-border-subtle)] bg-[var(--color-bg-card)] p-6 shadow-lg shadow-black/20 ${
+        highlight ? "card-glow border-[var(--color-accent-blue)]/30" : ""
       } ${className}`}
     >
       {children}

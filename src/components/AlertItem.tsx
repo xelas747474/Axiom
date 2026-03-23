@@ -18,15 +18,23 @@ const severityBg: Record<Alert["severity"], string> = {
   high: "bg-[var(--color-negative)]/10",
 };
 
+const severityBorder: Record<Alert["severity"], string> = {
+  low: "hover:border-[var(--color-accent-blue)]/30",
+  medium: "hover:border-[var(--color-warning)]/30",
+  high: "hover:border-[var(--color-negative)]/30",
+};
+
 interface AlertItemProps {
   alert: Alert;
 }
 
 export default function AlertItem({ alert }: AlertItemProps) {
   return (
-    <div className="flex items-start gap-4 rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-bg-card)] p-4 transition-colors hover:bg-[var(--color-bg-card-hover)]">
+    <div
+      className={`flex items-start gap-4 rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-bg-card)] p-4 transition-all duration-300 hover:bg-[var(--color-bg-card-hover)] hover:-translate-y-0.5 hover:shadow-lg hover:shadow-black/20 ${severityBorder[alert.severity]} animate-fade-in-up`}
+    >
       <div
-        className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-lg ${severityBg[alert.severity]}`}
+        className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-lg transition-transform duration-300 hover:scale-110 ${severityBg[alert.severity]}`}
       >
         {typeIcons[alert.type]}
       </div>

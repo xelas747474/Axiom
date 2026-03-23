@@ -1,15 +1,15 @@
+"use client";
+
+import { useEffect, useState } from "react";
 import Card from "@/components/Card";
 import Button from "@/components/Button";
 import AISummaryBlock from "@/components/AISummaryBlock";
 import AlertItem from "@/components/AlertItem";
 import ChartContainer from "@/components/ChartContainer";
 import {
-  marketOverview,
-  aiMarketSummary,
-  topGainers,
-  topLosers,
-  alerts,
-  quickInsights,
+  type CryptoAsset,
+  type Alert as AlertType,
+  type InsightCard as InsightCardType,
 } from "@/data/mock";
 
 const statusColors = {
@@ -24,21 +24,122 @@ const statusBg = {
   neutral: "bg-[var(--color-warning)]/10",
 };
 
+// Fear & Greed color based on value
+function fearGreedColor(value: number): string {
+  if (value <= 25) return "text-[var(--color-negative)]";
+  if (value <= 45) return "text-[var(--color-warning)]";
+  if (value <= 55) return "text-[var(--color-text-secondary)]";
+  if (value <= 75) return "text-[var(--color-positive)]";
+  return "text-[var(--color-positive)]";
+}
+
+function fearGreedLabel(value: number): string {
+  if (value <= 25) return "Extreme Fear";
+  if (value <= 45) return "Fear";
+  if (value <= 55) return "Neutral";
+  if (value <= 75) return "Greed";
+  return "Extreme Greed";
+}
+
+interface MarketData {
+  bitcoin: { price: number; change24h: number };
+  ethereum: { price: number; change24h: number };
+  marketCap: number;
+  btcDominance: number;
+  fearGreedIndex: number;
+  topGainers: CryptoAsset[];
+  topLosers: CryptoAsset[];
+  aiSummary: string;
+  alerts: AlertType[];
+  quickInsights: InsightCardType[];
+  chartData: Record<string, number[]>;
+}
+
 export default function Dashboard() {
+  const [data, setData] = useState<MarketData | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    async function fetchData() {
+      try {
+        const res = await fetch("/api/market");
+        if (res.ok) {
+          const json = await res.json();
+          setData(json);
+        }
+      } catch {
+        // API not available — will use null state
+      } finally {
+        setLoading(false);
+      }
+    }
+    fetchData();
+    const interval = setInterval(fetchData, 60000); // Refresh every 60s
+    return () => clearInterval(interval);
+  }, []);
+
+  // Fallback mock data if API fails
+  const fallback: MarketData = {
+    bitcoin: { price: 67842.5, change24h: 2.34 },
+    ethereum: { price: 3521.18, change24h: -0.87 },
+    marketCap: 2.47,
+    btcDominance: 54.2,
+    fearGreedIndex: 62,
+    topGainers: [
+      { name: "Solana", symbol: "SOL", price: 178.42, change24h: 8.56 },
+      { name: "Avalanche", symbol: "AVAX", price: 42.18, change24h: 6.23 },
+      { name: "Chainlink", symbol: "LINK", price: 18.95, change24h: 5.12 },
+      { name: "Render", symbol: "RNDR", price: 11.24, change24h: 4.87 },
+      { name: "Injective", symbol: "INJ", price: 35.67, change24h: 4.15 },
+    ],
+    topLosers: [
+      { name: "Dogecoin", symbol: "DOGE", price: 0.1234, change24h: -5.67 },
+      { name: "Shiba Inu", symbol: "SHIB", price: 0.00002345, change24h: -4.89 },
+      { name: "Cardano", symbol: "ADA", price: 0.5678, change24h: -3.45 },
+      { name: "Polkadot", symbol: "DOT", price: 7.89, change24h: -2.98 },
+      { name: "Cosmos", symbol: "ATOM", price: 9.12, change24h: -2.34 },
+    ],
+    aiSummary:
+      "Le marché est en phase de consolidation. La dominance BTC augmente à 54.2%, indiquant une rotation du capital depuis les altcoins vers Bitcoin. Prudence à court terme recommandée.",
+    alerts: [
+      { id: "1", type: "volatility", title: "Forte volatilité BTC", description: "Variation de 4.2% en 2h.", timestamp: "Il y a 12 min", severity: "high" },
+      { id: "2", type: "breakout", title: "Breakout potentiel ETH", description: "Résistance à $3,600.", timestamp: "Il y a 34 min", severity: "medium" },
+      { id: "3", type: "risk", title: "Risque de liquidation", description: "$500M à risque sous $66,000.", timestamp: "Il y a 1h", severity: "high" },
+    ],
+    quickInsights: [
+      { title: "Market Sentiment", value: "62/100", description: "Cupidité modérée", status: "positive" },
+      { title: "Pump Alert", value: "SOL +8.5%", description: "Volume 3x supérieur", status: "positive" },
+      { title: "Trend Direction", value: "Haussier", description: "Tendance 7j haussière", status: "positive" },
+      { title: "Risk Level", value: "Modéré", description: "Volatilité en hausse", status: "neutral" },
+    ],
+    chartData: {
+      "1H": [67500, 67600, 67450, 67700, 67650, 67800, 67750, 67842],
+      "1D": [66800, 67100, 66900, 67400, 67200, 67600, 67500, 67842],
+      "1W": [64000, 65200, 64800, 66500, 65900, 67200, 66800, 67842],
+      "1M": [58000, 60500, 59000, 63000, 61500, 65000, 64000, 67842],
+      "1Y": [28000, 35000, 42000, 38000, 45000, 52000, 60000, 67842],
+    },
+  };
+
+  const d = data ?? fallback;
+  const fgi = d.fearGreedIndex;
+
   return (
-    <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 space-y-10">
+    <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 space-y-12">
       {/* Section 1: Hero */}
-      <section className="text-center py-12">
-        <h1 className="text-4xl font-bold tracking-tight text-white sm:text-5xl">
+      <section className="text-center py-16 animate-fade-in-up relative">
+        {/* Background decorations */}
+        <div className="pointer-events-none absolute left-1/2 top-0 -translate-x-1/2 h-64 w-96 rounded-full bg-[var(--color-accent-blue)]/5 blur-[100px]" />
+        <h1 className="relative text-4xl font-bold tracking-tight text-white sm:text-5xl lg:text-6xl">
           Axiom —{" "}
-          <span className="bg-gradient-to-r from-[var(--color-accent-blue)] to-[var(--color-accent-purple)] bg-clip-text text-transparent">
+          <span className="bg-gradient-to-r from-[var(--color-accent-blue)] via-[var(--color-accent-purple)] to-[var(--color-accent-cyan)] bg-clip-text text-transparent gradient-text-animated bg-[length:200%_auto]">
             AI Crypto Intelligence
           </span>
         </h1>
-        <p className="mt-4 text-lg text-[var(--color-text-secondary)] max-w-2xl mx-auto">
+        <p className="relative mt-5 text-lg text-[var(--color-text-secondary)] max-w-2xl mx-auto animate-fade-in" style={{ animationDelay: "200ms" }}>
           Comprends le marché crypto en temps réel grâce à l&apos;IA
         </p>
-        <div className="mt-8 flex items-center justify-center gap-4">
+        <div className="relative mt-10 flex items-center justify-center gap-4 animate-fade-in" style={{ animationDelay: "400ms" }}>
           <Button variant="primary" size="lg">
             Voir le marché
           </Button>
@@ -49,80 +150,86 @@ export default function Dashboard() {
       </section>
 
       {/* Section 2: Market Overview */}
-      <section>
-        <h2 className="text-xl font-bold text-white mb-4">Market Overview</h2>
-        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
-          <Card>
+      <section className="animate-fade-in-up" style={{ animationDelay: "100ms" }}>
+        <h2 className="text-xl font-bold text-white mb-5 flex items-center gap-2">
+          Market Overview
+          {!loading && data && (
+            <span className="flex items-center gap-1.5 text-xs font-normal text-[var(--color-positive)]">
+              <span className="h-1.5 w-1.5 rounded-full bg-[var(--color-positive)] animate-live-pulse" />
+              Live
+            </span>
+          )}
+        </h2>
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5 stagger-children">
+          <Card className="animate-fade-in-up">
             <p className="text-xs text-[var(--color-text-muted)] uppercase tracking-wider">
               Bitcoin
             </p>
-            <p className="mt-2 text-2xl font-bold text-white">
-              ${marketOverview.bitcoin.price.toLocaleString()}
+            <p className="mt-2 text-2xl font-bold text-white tabular-nums">
+              ${d.bitcoin.price.toLocaleString()}
             </p>
             <p
               className={`mt-1 text-sm font-medium ${
-                marketOverview.bitcoin.change24h >= 0
+                d.bitcoin.change24h >= 0
                   ? "text-[var(--color-positive)]"
                   : "text-[var(--color-negative)]"
               }`}
             >
-              {marketOverview.bitcoin.change24h >= 0 ? "+" : ""}
-              {marketOverview.bitcoin.change24h}%
+              {d.bitcoin.change24h >= 0 ? "+" : ""}
+              {d.bitcoin.change24h.toFixed(2)}%
             </p>
           </Card>
 
-          <Card>
+          <Card className="animate-fade-in-up">
             <p className="text-xs text-[var(--color-text-muted)] uppercase tracking-wider">
               Ethereum
             </p>
-            <p className="mt-2 text-2xl font-bold text-white">
-              ${marketOverview.ethereum.price.toLocaleString()}
+            <p className="mt-2 text-2xl font-bold text-white tabular-nums">
+              ${d.ethereum.price.toLocaleString()}
             </p>
             <p
               className={`mt-1 text-sm font-medium ${
-                marketOverview.ethereum.change24h >= 0
+                d.ethereum.change24h >= 0
                   ? "text-[var(--color-positive)]"
                   : "text-[var(--color-negative)]"
               }`}
             >
-              {marketOverview.ethereum.change24h >= 0 ? "+" : ""}
-              {marketOverview.ethereum.change24h}%
+              {d.ethereum.change24h >= 0 ? "+" : ""}
+              {d.ethereum.change24h.toFixed(2)}%
             </p>
           </Card>
 
-          <Card>
+          <Card className="animate-fade-in-up">
             <p className="text-xs text-[var(--color-text-muted)] uppercase tracking-wider">
               Market Cap
             </p>
-            <p className="mt-2 text-2xl font-bold text-white">
-              ${marketOverview.marketCap}T
+            <p className="mt-2 text-2xl font-bold text-white tabular-nums">
+              ${d.marketCap.toFixed(2)}T
             </p>
-            <p className="mt-1 text-sm text-[var(--color-text-muted)]">
-              Total
-            </p>
+            <p className="mt-1 text-sm text-[var(--color-text-muted)]">Total</p>
           </Card>
 
-          <Card>
+          <Card className="animate-fade-in-up">
             <p className="text-xs text-[var(--color-text-muted)] uppercase tracking-wider">
               BTC Dominance
             </p>
-            <p className="mt-2 text-2xl font-bold text-white">
-              {marketOverview.btcDominance}%
+            <p className="mt-2 text-2xl font-bold text-white tabular-nums">
+              {d.btcDominance.toFixed(1)}%
             </p>
             <p className="mt-1 text-sm text-[var(--color-accent-blue)]">
               En hausse
             </p>
           </Card>
 
-          <Card>
+          <Card className="animate-fade-in-up">
             <p className="text-xs text-[var(--color-text-muted)] uppercase tracking-wider">
               Fear & Greed
             </p>
-            <p className="mt-2 text-2xl font-bold text-white">
-              {marketOverview.fearGreedIndex}
+            <p className={`mt-2 text-2xl font-bold tabular-nums ${fearGreedColor(fgi)}`}>
+              {fgi}
             </p>
-            <p className="mt-1 text-sm text-[var(--color-warning)]">
-              {marketOverview.fearGreedLabel}
+            <p className={`mt-1 text-sm ${fearGreedColor(fgi)}`}>
+              {fearGreedLabel(fgi)}
             </p>
           </Card>
         </div>
@@ -130,22 +237,23 @@ export default function Dashboard() {
 
       {/* Section 3: AI Market Summary */}
       <section>
-        <AISummaryBlock summary={aiMarketSummary} />
+        <AISummaryBlock summary={d.aiSummary} loading={loading} />
       </section>
 
       {/* Section 4: Top Movers */}
-      <section>
-        <h2 className="text-xl font-bold text-white mb-4">Top Movers</h2>
+      <section className="animate-fade-in-up" style={{ animationDelay: "200ms" }}>
+        <h2 className="text-xl font-bold text-white mb-5">Top Movers</h2>
         <div className="grid gap-6 md:grid-cols-2">
           <Card>
-            <h3 className="text-sm font-semibold text-[var(--color-positive)] uppercase tracking-wider mb-4">
+            <h3 className="text-sm font-semibold text-[var(--color-positive)] uppercase tracking-wider mb-4 flex items-center gap-2">
+              <span className="h-2 w-2 rounded-full bg-[var(--color-positive)]" />
               Top Gainers
             </h3>
-            <div className="space-y-3">
-              {topGainers.map((coin) => (
+            <div className="space-y-2 stagger-children">
+              {d.topGainers.map((coin) => (
                 <div
                   key={coin.symbol}
-                  className="flex items-center justify-between rounded-lg bg-[var(--color-bg-primary)]/50 px-4 py-3"
+                  className="flex items-center justify-between rounded-lg bg-[var(--color-bg-primary)]/50 px-4 py-3 transition-all duration-300 hover:bg-[var(--color-bg-primary)] hover:translate-x-1 animate-slide-in-right"
                 >
                   <div>
                     <span className="font-semibold text-white">
@@ -156,11 +264,11 @@ export default function Dashboard() {
                     </span>
                   </div>
                   <div className="text-right">
-                    <p className="text-sm font-medium text-white">
+                    <p className="text-sm font-medium text-white tabular-nums">
                       ${coin.price.toLocaleString()}
                     </p>
-                    <p className="text-xs font-medium text-[var(--color-positive)]">
-                      +{coin.change24h}%
+                    <p className="text-xs font-medium text-[var(--color-positive)] tabular-nums">
+                      +{coin.change24h.toFixed(2)}%
                     </p>
                   </div>
                 </div>
@@ -169,14 +277,15 @@ export default function Dashboard() {
           </Card>
 
           <Card>
-            <h3 className="text-sm font-semibold text-[var(--color-negative)] uppercase tracking-wider mb-4">
+            <h3 className="text-sm font-semibold text-[var(--color-negative)] uppercase tracking-wider mb-4 flex items-center gap-2">
+              <span className="h-2 w-2 rounded-full bg-[var(--color-negative)]" />
               Top Losers
             </h3>
-            <div className="space-y-3">
-              {topLosers.map((coin) => (
+            <div className="space-y-2 stagger-children">
+              {d.topLosers.map((coin) => (
                 <div
                   key={coin.symbol}
-                  className="flex items-center justify-between rounded-lg bg-[var(--color-bg-primary)]/50 px-4 py-3"
+                  className="flex items-center justify-between rounded-lg bg-[var(--color-bg-primary)]/50 px-4 py-3 transition-all duration-300 hover:bg-[var(--color-bg-primary)] hover:translate-x-1 animate-slide-in-right"
                 >
                   <div>
                     <span className="font-semibold text-white">
@@ -187,11 +296,14 @@ export default function Dashboard() {
                     </span>
                   </div>
                   <div className="text-right">
-                    <p className="text-sm font-medium text-white">
-                      ${coin.price < 0.01 ? coin.price.toFixed(8) : coin.price.toLocaleString()}
+                    <p className="text-sm font-medium text-white tabular-nums">
+                      $
+                      {coin.price < 0.01
+                        ? coin.price.toFixed(8)
+                        : coin.price.toLocaleString()}
                     </p>
-                    <p className="text-xs font-medium text-[var(--color-negative)]">
-                      {coin.change24h}%
+                    <p className="text-xs font-medium text-[var(--color-negative)] tabular-nums">
+                      {coin.change24h.toFixed(2)}%
                     </p>
                   </div>
                 </div>
@@ -203,30 +315,33 @@ export default function Dashboard() {
 
       {/* Section 5: BTC Chart */}
       <section>
-        <ChartContainer />
+        <ChartContainer
+          data={d.chartData}
+          currentPrice={d.bitcoin.price}
+        />
       </section>
 
       {/* Section 6: Alerts */}
-      <section>
-        <h2 className="text-xl font-bold text-white mb-4">Alertes récentes</h2>
-        <div className="space-y-3">
-          {alerts.slice(0, 3).map((alert) => (
+      <section className="animate-fade-in-up">
+        <h2 className="text-xl font-bold text-white mb-5">Alertes récentes</h2>
+        <div className="space-y-3 stagger-children">
+          {d.alerts.slice(0, 3).map((alert) => (
             <AlertItem key={alert.id} alert={alert} />
           ))}
         </div>
       </section>
 
       {/* Section 7: Quick Insights */}
-      <section>
-        <h2 className="text-xl font-bold text-white mb-4">Insights rapides</h2>
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          {quickInsights.map((insight) => (
-            <Card key={insight.title}>
+      <section className="animate-fade-in-up">
+        <h2 className="text-xl font-bold text-white mb-5">Insights rapides</h2>
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 stagger-children">
+          {d.quickInsights.map((insight) => (
+            <Card key={insight.title} className="animate-fade-in-up group">
               <p className="text-xs text-[var(--color-text-muted)] uppercase tracking-wider">
                 {insight.title}
               </p>
               <p
-                className={`mt-2 text-2xl font-bold ${statusColors[insight.status]}`}
+                className={`mt-2 text-2xl font-bold tabular-nums ${statusColors[insight.status]} transition-transform duration-300 group-hover:scale-105 origin-left`}
               >
                 {insight.value}
               </p>
@@ -235,7 +350,7 @@ export default function Dashboard() {
               </p>
               <div className="mt-3">
                 <span
-                  className={`inline-block rounded-full px-2.5 py-0.5 text-[10px] font-bold uppercase ${statusBg[insight.status]} ${statusColors[insight.status]}`}
+                  className={`inline-block rounded-full px-2.5 py-0.5 text-[10px] font-bold uppercase transition-all duration-300 ${statusBg[insight.status]} ${statusColors[insight.status]}`}
                 >
                   {insight.status === "positive"
                     ? "Favorable"
