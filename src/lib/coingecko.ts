@@ -1,10 +1,10 @@
 // ============================================
-// CoinGecko API Client — with retry, timeout, and full fallbacks
+// CoinGecko API Client — with fast timeout, retry, and full fallbacks
 // Free API — no key required (rate limited at ~30 req/min)
 // ============================================
 
 const BASE_URL = "https://api.coingecko.com/api/v3";
-const FETCH_TIMEOUT = 8000; // 8s timeout per request
+const FETCH_TIMEOUT = 4000; // 4s timeout — fail fast, use fallback
 
 interface CoinGeckoMarketCoin {
   id: string;
@@ -50,7 +50,7 @@ export interface MarketDataResult {
     change24h: number;
   }>;
   chartData: Record<string, number[]>;
-  isLive: boolean; // indicates whether data is real or fallback
+  isLive: boolean;
 }
 
 // ============================================
@@ -87,71 +87,55 @@ export const FALLBACK_MARKET_DATA: MarketDataResult = {
 };
 
 // ============================================
-// Fetch with timeout + retry
+// Fetch with timeout — single attempt, fail fast
+// Next.js revalidate handles caching at the route level
 // ============================================
-async function fetchWithTimeout<T>(url: string, retries = 2): Promise<T | null> {
-  for (let attempt = 0; attempt <= retries; attempt++) {
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT);
+async function fetchSafe<T>(url: string): Promise<T | null> {
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT);
 
-      const res = await fetch(url, {
-        signal: controller.signal,
-        headers: {
-          Accept: "application/json",
-          "User-Agent": "AXIOM-Crypto-Dashboard/1.0",
-        },
-      });
+    const res = await fetch(url, {
+      signal: controller.signal,
+      next: { revalidate: 60 }, // Cache for 60s via Next.js ISR
+      headers: { Accept: "application/json" },
+    });
 
-      clearTimeout(timeoutId);
+    clearTimeout(timeoutId);
 
-      if (res.status === 429) {
-        // Rate limited — wait and retry
-        if (attempt < retries) {
-          await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
-          continue;
-        }
-        return null;
-      }
-
-      if (!res.ok) return null;
-      return (await res.json()) as T;
-    } catch {
-      if (attempt < retries) {
-        await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
-        continue;
-      }
-      return null;
-    }
+    if (!res.ok) return null;
+    return (await res.json()) as T;
+  } catch {
+    return null; // Timeout, network error, etc. — return null immediately
   }
-  return null;
 }
 
 // ============================================
 // Main fetch — gracefully degrades on any failure
+// Total worst case: ~4s (single timeout, all parallel)
 // ============================================
 export async function fetchMarketData(): Promise<MarketDataResult> {
   const [coins, globalData, fearGreedData, btcChart7d, btcChart30d, btcChart365d] =
     await Promise.all([
-      fetchWithTimeout<CoinGeckoMarketCoin[]>(
+      fetchSafe<CoinGeckoMarketCoin[]>(
         `${BASE_URL}/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=50&page=1&sparkline=false&price_change_percentage=24h`
       ),
-      fetchWithTimeout<CoinGeckoGlobal>(`${BASE_URL}/global`),
-      fetchWithTimeout<CoinGeckoFearGreed>(
+      fetchSafe<CoinGeckoGlobal>(`${BASE_URL}/global`),
+      fetchSafe<CoinGeckoFearGreed>(
         "https://api.alternative.me/fng/?limit=1"
       ),
-      fetchWithTimeout<{ prices: [number, number][] }>(
+      fetchSafe<{ prices: [number, number][] }>(
         `${BASE_URL}/coins/bitcoin/market_chart?vs_currency=usd&days=7`
       ),
-      fetchWithTimeout<{ prices: [number, number][] }>(
+      fetchSafe<{ prices: [number, number][] }>(
         `${BASE_URL}/coins/bitcoin/market_chart?vs_currency=usd&days=30`
       ),
-      fetchWithTimeout<{ prices: [number, number][] }>(
+      fetchSafe<{ prices: [number, number][] }>(
         `${BASE_URL}/coins/bitcoin/market_chart?vs_currency=usd&days=365`
       ),
     ]);
 
-  // If the critical request (coins) failed, return full fallback
+  // If the critical request (coins) failed, return full fallback immediately
   if (!coins) {
     return FALLBACK_MARKET_DATA;
   }

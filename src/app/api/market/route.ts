@@ -5,7 +5,7 @@ import {
   aiMarketSummary as mockSummary,
 } from "@/data/mock";
 
-export const dynamic = "force-dynamic"; // Always run server-side, never static
+export const revalidate = 60; // ISR: cache response for 60s, then refresh
 
 export async function GET() {
   let market: MarketDataResult;
