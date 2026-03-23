@@ -4,7 +4,15 @@
 // ============================================
 
 const BASE_URL = "https://api.coingecko.com/api/v3";
-const FETCH_TIMEOUT = 4000; // 4s timeout — fail fast, use fallback
+const FETCH_TIMEOUT = 6000; // 6s timeout — a bit more room for slow API
+
+// ============================================
+// Server-side in-memory cache — prevents flickering between live & fallback
+// When CoinGecko rate-limits, we return the LAST known live data
+// ============================================
+let cachedResult: MarketDataResult | null = null;
+let cacheTimestamp = 0;
+const CACHE_TTL = 25_000; // 25s — slightly under the 30s ISR revalidate
 
 interface CoinGeckoMarketCoin {
   id: string;
@@ -77,11 +85,11 @@ export const FALLBACK_MARKET_DATA: MarketDataResult = {
     { name: "Cosmos", symbol: "ATOM", price: 9.12, change24h: -2.34 },
   ],
   chartData: {
-    "1H": [67500, 67600, 67450, 67700, 67650, 67800, 67750, 67842],
-    "1D": [66800, 67100, 66900, 67400, 67200, 67600, 67500, 67842],
-    "1W": [64000, 65200, 64800, 66500, 65900, 67200, 66800, 67842],
-    "1M": [58000, 60500, 59000, 63000, 61500, 65000, 64000, 67842],
-    "1Y": [28000, 35000, 42000, 38000, 45000, 52000, 60000, 67842],
+    "1H": [67500, 67550, 67600, 67580, 67450, 67520, 67700, 67650, 67680, 67800, 67750, 67842],
+    "1D": [66800, 66950, 67100, 67050, 66900, 67000, 67200, 67400, 67350, 67200, 67300, 67600, 67500, 67450, 67550, 67650, 67700, 67600, 67700, 67750, 67800, 67780, 67820, 67842],
+    "1W": [64000, 64300, 64600, 65200, 65000, 64800, 65100, 65400, 65800, 66200, 66500, 66300, 65900, 66100, 66400, 66700, 67000, 67200, 67100, 66800, 66900, 67100, 67300, 67500, 67400, 67300, 67500, 67600, 67700, 67842],
+    "1M": [58000, 58500, 59200, 60500, 60000, 59000, 59500, 60200, 61000, 61800, 63000, 62500, 61500, 62000, 62800, 63500, 64200, 65000, 64500, 64000, 64800, 65500, 66200, 66800, 67000, 67200, 67500, 67842],
+    "1Y": [28000, 30000, 32000, 35000, 33000, 37000, 42000, 40000, 38000, 41000, 43000, 45000, 44000, 47000, 49000, 52000, 50000, 53000, 55000, 57000, 60000, 62000, 64000, 66000, 67842],
   },
   isLive: false,
 };
@@ -97,7 +105,7 @@ async function fetchSafe<T>(url: string): Promise<T | null> {
 
     const res = await fetch(url, {
       signal: controller.signal,
-      cache: "no-store", // Always fresh — caching handled at route level via revalidate
+      next: { revalidate: 30 }, // Let Next.js cache for 30s — avoids rate limit hammering
       headers: { Accept: "application/json" },
     });
 
@@ -115,7 +123,12 @@ async function fetchSafe<T>(url: string): Promise<T | null> {
 // Total worst case: ~4s (single timeout, all parallel)
 // ============================================
 export async function fetchMarketData(): Promise<MarketDataResult> {
-  const [coins, globalData, fearGreedData, btcChart7d, btcChart30d, btcChart365d] =
+  // Return cached data if still fresh
+  if (cachedResult && Date.now() - cacheTimestamp < CACHE_TTL) {
+    return cachedResult;
+  }
+
+  const [coins, globalData, fearGreedData, btcChart1d, btcChart7d, btcChart30d, btcChart365d] =
     await Promise.all([
       fetchSafe<CoinGeckoMarketCoin[]>(
         `${BASE_URL}/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=50&page=1&sparkline=false&price_change_percentage=24h`
@@ -123,6 +136,9 @@ export async function fetchMarketData(): Promise<MarketDataResult> {
       fetchSafe<CoinGeckoGlobal>(`${BASE_URL}/global`),
       fetchSafe<CoinGeckoFearGreed>(
         "https://api.alternative.me/fng/?limit=1"
+      ),
+      fetchSafe<{ prices: [number, number][] }>(
+        `${BASE_URL}/coins/bitcoin/market_chart?vs_currency=usd&days=1`
       ),
       fetchSafe<{ prices: [number, number][] }>(
         `${BASE_URL}/coins/bitcoin/market_chart?vs_currency=usd&days=7`
@@ -135,9 +151,9 @@ export async function fetchMarketData(): Promise<MarketDataResult> {
       ),
     ]);
 
-  // If the critical request (coins) failed, return full fallback immediately
+  // If the critical request (coins) failed, return cached or fallback
   if (!coins) {
-    return FALLBACK_MARKET_DATA;
+    return cachedResult ?? FALLBACK_MARKET_DATA;
   }
 
   const btc = coins.find((c) => c.id === "bitcoin");
@@ -168,43 +184,48 @@ export async function fetchMarketData(): Promise<MarketDataResult> {
       change24h: Math.round(c.price_change_percentage_24h * 100) / 100,
     }));
 
-  // Extract chart data — sample 8 evenly spaced points
+  // Extract chart data — sample N evenly spaced points for smooth curves
   function samplePrices(
     data: { prices: [number, number][] } | null,
-    fallback: number[]
+    fallback: number[],
+    targetPoints = 48
   ): number[] {
     if (!data?.prices?.length) return fallback;
     const prices = data.prices.map((p) => p[1]);
-    if (prices.length < 8) return prices.map(Math.round);
-    const step = Math.floor(prices.length / 7);
+    if (prices.length <= targetPoints) return prices.map(Math.round);
+    const step = (prices.length - 1) / (targetPoints - 1);
     const sampled: number[] = [];
-    for (let i = 0; i < 7; i++) {
-      sampled.push(Math.round(prices[i * step]));
+    for (let i = 0; i < targetPoints - 1; i++) {
+      sampled.push(Math.round(prices[Math.round(i * step)]));
     }
     sampled.push(Math.round(prices[prices.length - 1]));
     return sampled;
   }
 
-  const btcPrice = btc?.current_price ?? FALLBACK_MARKET_DATA.bitcoin.price;
   const fallbackChart = FALLBACK_MARKET_DATA.chartData;
 
+  // 1H: last ~12 points from 1-day data (each ~5min granularity from CoinGecko)
+  let hourData = fallbackChart["1H"];
+  if (btcChart1d?.prices?.length) {
+    const prices = btcChart1d.prices.map((p) => p[1]);
+    // Take the last ~12 data points for "1 hour" view
+    const lastN = Math.min(12, prices.length);
+    hourData = prices.slice(-lastN).map(Math.round);
+  }
+
   const chartData: Record<string, number[]> = {
-    "1H": [
-      btcPrice * 0.998, btcPrice * 0.999, btcPrice * 0.997,
-      btcPrice * 1.001, btcPrice * 1.0, btcPrice * 1.002,
-      btcPrice * 1.001, btcPrice,
-    ].map(Math.round),
-    "1D": samplePrices(btcChart7d, fallbackChart["1D"]),
-    "1W": samplePrices(btcChart7d, fallbackChart["1W"]),
-    "1M": samplePrices(btcChart30d, fallbackChart["1M"]),
-    "1Y": samplePrices(btcChart365d, fallbackChart["1Y"]),
+    "1H": hourData,
+    "1D": samplePrices(btcChart1d, fallbackChart["1D"], 24),
+    "1W": samplePrices(btcChart7d, fallbackChart["1W"], 48),
+    "1M": samplePrices(btcChart30d, fallbackChart["1M"], 48),
+    "1Y": samplePrices(btcChart365d, fallbackChart["1Y"], 52),
   };
 
   const fgiValue = fearGreedData?.data?.[0]?.value
     ? parseInt(fearGreedData.data[0].value, 10)
     : FALLBACK_MARKET_DATA.fearGreedIndex;
 
-  return {
+  const result: MarketDataResult = {
     bitcoin: {
       price: btc?.current_price ?? FALLBACK_MARKET_DATA.bitcoin.price,
       change24h:
@@ -227,4 +248,10 @@ export async function fetchMarketData(): Promise<MarketDataResult> {
     chartData,
     isLive: true,
   };
+
+  // Cache successful live data — so rate-limit failures still show last known data
+  cachedResult = result;
+  cacheTimestamp = Date.now();
+
+  return result;
 }
