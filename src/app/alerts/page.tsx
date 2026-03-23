@@ -42,6 +42,7 @@ export default function AlertsPage() {
         if (res.ok) {
           const json = await res.json();
           if (json.alerts?.length) setAlertsData(json.alerts);
+          retryCount = 0;
         }
       } catch {
         if (retryCount < 2) {
@@ -52,6 +53,11 @@ export default function AlertsPage() {
       }
     }
     fetchAlerts();
+    const interval = setInterval(() => {
+      retryCount = 0;
+      fetchAlerts();
+    }, 60000); // Refresh every 60s
+    return () => clearInterval(interval);
   }, []);
 
   const filteredAlerts =

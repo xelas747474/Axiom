@@ -116,10 +116,10 @@ export default function AIInsightsPage() {
 
         if (res.ok) {
           const json = await res.json();
-          // Validate the response has real content (not empty N/A)
           if (json.global?.content && json.global.content !== "Données en cours de chargement...") {
             setInsights(json);
           }
+          retryCount = 0;
         }
       } catch {
         if (retryCount < 2) {
@@ -132,6 +132,11 @@ export default function AIInsightsPage() {
       }
     }
     fetchInsights();
+    const interval = setInterval(() => {
+      retryCount = 0;
+      fetchInsights();
+    }, 120000); // Refresh every 2 minutes
+    return () => clearInterval(interval);
   }, []);
 
   // Fallback data
