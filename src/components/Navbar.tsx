@@ -1,10 +1,13 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import AuthModal from "./AuthModal";
 
 const navLinks = [
   { href: "/dashboard", label: "Dashboard" },
+  { href: "/trading", label: "Trading" },
   { href: "/ai-insights", label: "AI Insights" },
   { href: "/alerts", label: "Alerts" },
   { href: "/settings", label: "Settings" },
@@ -12,10 +15,11 @@ const navLinks = [
 
 export default function Navbar() {
   const pathname = usePathname();
+  const [authOpen, setAuthOpen] = useState(false);
 
   return (
     <nav className="sticky top-0 z-50 border-b border-[var(--color-border-subtle)]/50 glass">
-      <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-3 sm:px-6">
+      <div className="mx-auto flex max-w-[1600px] items-center justify-between px-4 py-3 sm:px-6">
         <Link
           href="/dashboard"
           className="flex items-center gap-2.5 group transition-transform duration-300 hover:scale-105"
@@ -52,7 +56,10 @@ export default function Navbar() {
           })}
         </div>
 
-        <button className="btn-shine rounded-lg border border-[var(--color-border-subtle)] bg-[var(--color-bg-card)] px-4 py-2 text-sm font-medium text-[var(--color-text-secondary)] transition-all duration-300 hover:border-[var(--color-accent-blue)]/50 hover:text-white hover:shadow-lg hover:shadow-[var(--color-accent-blue)]/10 active:scale-[0.97]">
+        <button
+          onClick={() => setAuthOpen(true)}
+          className="btn-shine rounded-lg border border-[var(--color-border-subtle)] bg-[var(--color-bg-card)] px-4 py-2 text-sm font-medium text-[var(--color-text-secondary)] transition-all duration-300 hover:border-[var(--color-accent-blue)]/50 hover:text-white hover:shadow-lg hover:shadow-[var(--color-accent-blue)]/10 active:scale-[0.97]"
+        >
           Se connecter
         </button>
       </div>
@@ -78,6 +85,8 @@ export default function Navbar() {
           );
         })}
       </div>
+
+      <AuthModal isOpen={authOpen} onClose={() => setAuthOpen(false)} />
     </nav>
   );
 }
