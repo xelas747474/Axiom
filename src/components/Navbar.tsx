@@ -9,6 +9,7 @@ import AuthModal from "./AuthModal";
 const navLinks = [
   { href: "/dashboard", label: "Dashboard" },
   { href: "/trading", label: "Trading" },
+  { href: "/bot", label: "\u{1F916} Bot" },
   { href: "/ai-insights", label: "AI Insights" },
   { href: "/alerts", label: "Alerts" },
 ];
