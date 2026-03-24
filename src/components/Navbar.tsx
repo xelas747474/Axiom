@@ -9,6 +9,7 @@ import AuthModal from "./AuthModal";
 const navLinks = [
   { href: "/dashboard", label: "Dashboard" },
   { href: "/trading", label: "Trading" },
+  { href: "/bot", label: "\u{1F916} Bot" },
   { href: "/ai-insights", label: "AI Insights" },
   { href: "/alerts", label: "Alerts" },
 ];
@@ -20,18 +21,22 @@ export default function Navbar() {
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  // Close dropdown on outside click
+  // Close dropdown on outside click — use click (not mousedown) to avoid intercepting link navigation
   useEffect(() => {
+    if (!dropdownOpen) return;
     function handleClick(e: MouseEvent) {
       if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
         setDropdownOpen(false);
       }
     }
-    if (dropdownOpen) {
-      document.addEventListener("mousedown", handleClick);
-    }
-    return () => document.removeEventListener("mousedown", handleClick);
+    document.addEventListener("click", handleClick, true);
+    return () => document.removeEventListener("click", handleClick, true);
   }, [dropdownOpen]);
+
+  // Close dropdown on route change
+  useEffect(() => {
+    setDropdownOpen(false);
+  }, [pathname]);
 
   const initials = user?.name
     ? user.name.split(" ").map((w) => w[0]).join("").toUpperCase().slice(0, 2)
@@ -52,7 +57,8 @@ export default function Navbar() {
           </span>
         </Link>
 
-        <div className="hidden items-center gap-1 md:flex">
+        {/* Desktop nav links — always visible, never blocked by dropdown */}
+        <div className="hidden items-center gap-1 md:flex relative z-10">
           {navLinks.map((link) => {
             const isActive =
               pathname === link.href ||
@@ -82,7 +88,7 @@ export default function Navbar() {
         ) : user ? (
           <div className="relative" ref={dropdownRef}>
             <button
-              onClick={() => setDropdownOpen(!dropdownOpen)}
+              onClick={(e) => { e.stopPropagation(); setDropdownOpen(!dropdownOpen); }}
               className="flex items-center gap-2.5 rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-bg-card)] px-3 py-1.5 transition-all duration-300 hover:border-[var(--color-accent-blue)]/30 hover:bg-[var(--color-bg-card-hover)]"
             >
               <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-gradient-to-br from-[var(--color-accent-blue)] to-[var(--color-accent-purple)] text-[10px] font-bold text-white">
@@ -104,7 +110,7 @@ export default function Navbar() {
 
             {/* Dropdown menu */}
             {dropdownOpen && (
-              <div className="absolute right-0 top-full mt-2 w-56 rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-bg-secondary)] p-1.5 shadow-2xl shadow-black/40 animate-scale-in origin-top-right">
+              <div className="absolute right-0 top-full mt-2 w-56 rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-bg-secondary)] p-1.5 shadow-2xl shadow-black/40 animate-scale-in origin-top-right z-50">
                 {/* User info */}
                 <div className="px-3 py-2.5 border-b border-[var(--color-border-subtle)]/50 mb-1.5">
                   <p className="text-sm font-semibold text-white truncate">{user.name}</p>

@@ -2,30 +2,7 @@
 
 import { useState } from "react";
 import type { AISignalResult, CategoryScore } from "@/lib/indicators/types";
-
-const signalColors: Record<string, string> = {
-  STRONG_BUY: "#22c55e",
-  BUY: "#4ade80",
-  NEUTRAL: "#64748b",
-  SELL: "#f87171",
-  STRONG_SELL: "#ef4444",
-};
-
-const signalLabels: Record<string, string> = {
-  STRONG_BUY: "STRONG BUY",
-  BUY: "BUY",
-  NEUTRAL: "NEUTRAL",
-  SELL: "SELL",
-  STRONG_SELL: "STRONG SELL",
-};
-
-const signalBg: Record<string, string> = {
-  STRONG_BUY: "rgba(34,197,94,0.12)",
-  BUY: "rgba(74,222,128,0.1)",
-  NEUTRAL: "rgba(100,116,139,0.1)",
-  SELL: "rgba(248,113,113,0.1)",
-  STRONG_SELL: "rgba(239,68,68,0.12)",
-};
+import { getSignalInfo, getSignalColor, getScoreLabel, GAUGE_GRADIENT_STOPS } from "@/lib/signals";
 
 function formatPrice(price: number): string {
   if (price >= 1000) return `$${price.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
@@ -33,54 +10,49 @@ function formatPrice(price: number): string {
   return `$${price.toFixed(6)}`;
 }
 
-// Gauge SVG component
+// Gauge SVG component — full 9-level gradient
 function ScoreGauge({ score, size = 180 }: { score: number; size?: number }) {
   const normalizedScore = (score + 100) / 200; // 0 to 1
   const angle = -135 + normalizedScore * 270; // -135 to +135 degrees
   const radius = size / 2 - 20;
   const cx = size / 2;
   const cy = size / 2;
+  const gradientId = "gauge-gradient";
 
-  // Arc path for background
-  const arcStart = -135;
-  const arcEnd = 135;
   function polarToCartesian(cx: number, cy: number, r: number, angleDeg: number) {
     const rad = ((angleDeg - 90) * Math.PI) / 180;
     return { x: cx + r * Math.cos(rad), y: cy + r * Math.sin(rad) };
   }
 
+  const arcStart = -135;
+  const arcEnd = 135;
   const bgStart = polarToCartesian(cx, cy, radius, arcStart);
   const bgEnd = polarToCartesian(cx, cy, radius, arcEnd);
   const bgPath = `M ${bgStart.x} ${bgStart.y} A ${radius} ${radius} 0 1 1 ${bgEnd.x} ${bgEnd.y}`;
 
-  // Filled arc
-  const fillEnd = polarToCartesian(cx, cy, radius, angle);
-  const largeArc = angle - arcStart > 180 ? 1 : 0;
-  const fillPath = `M ${bgStart.x} ${bgStart.y} A ${radius} ${radius} 0 ${largeArc} 1 ${fillEnd.x} ${fillEnd.y}`;
-
-  // Gradient color based on score
-  function getColor(s: number): string {
-    if (s > 50) return "#22c55e";
-    if (s > 15) return "#4ade80";
-    if (s > -15) return "#f59e0b";
-    if (s > -50) return "#f87171";
-    return "#ef4444";
-  }
-
   // Needle
   const needleEnd = polarToCartesian(cx, cy, radius - 15, angle);
+  const color = getSignalColor(score);
 
   return (
     <svg width={size} height={size * 0.7} viewBox={`0 0 ${size} ${size * 0.75}`} className="mx-auto">
-      {/* Background arc */}
+      <defs>
+        <linearGradient id={gradientId} x1="0%" y1="0%" x2="100%" y2="0%">
+          {GAUGE_GRADIENT_STOPS.map((s) => (
+            <stop key={s.offset} offset={s.offset} stopColor={s.color} />
+          ))}
+        </linearGradient>
+      </defs>
+
+      {/* Background arc (dim) */}
       <path d={bgPath} fill="none" stroke="rgba(42, 48, 80, 0.5)" strokeWidth="12" strokeLinecap="round" />
 
-      {/* Colored arc */}
-      <path d={fillPath} fill="none" stroke={getColor(score)} strokeWidth="12" strokeLinecap="round"
-        style={{ filter: `drop-shadow(0 0 6px ${getColor(score)}40)`, transition: "all 0.8s ease" }} />
+      {/* Full gradient arc */}
+      <path d={bgPath} fill="none" stroke={`url(#${gradientId})`} strokeWidth="12" strokeLinecap="round"
+        style={{ opacity: 0.35 }} />
 
       {/* Tick marks */}
-      {[-100, -50, 0, 50, 100].map((tick) => {
+      {[-100, -60, -20, 20, 60, 100].map((tick) => {
         const tickAngle = -135 + ((tick + 100) / 200) * 270;
         const inner = polarToCartesian(cx, cy, radius + 8, tickAngle);
         const outer = polarToCartesian(cx, cy, radius + 14, tickAngle);
@@ -97,18 +69,20 @@ function ScoreGauge({ score, size = 180 }: { score: number; size?: number }) {
       <circle cx={cx} cy={cy} r="5" fill="white" />
 
       {/* Score text */}
-      <text x={cx} y={cy + 28} textAnchor="middle" fill="white" fontSize="28" fontWeight="bold"
-        fontFamily="'JetBrains Mono', monospace">
+      <text x={cx} y={cy + 28} textAnchor="middle" fill={color} fontSize="28" fontWeight="bold"
+        fontFamily="'JetBrains Mono', monospace" style={{ transition: "fill 0.5s ease" }}>
         {score > 0 ? "+" : ""}{score}
       </text>
     </svg>
   );
 }
 
-// Category bar
+// Category bar — now with 9-level colors and score labels
 function CategoryBar({ category }: { category: CategoryScore }) {
   const [expanded, setExpanded] = useState(false);
   const pct = (category.score + 100) / 2;
+  const color = getSignalColor(category.score);
+  const label = getScoreLabel(category.score);
 
   return (
     <div className="space-y-2">
@@ -118,9 +92,10 @@ function CategoryBar({ category }: { category: CategoryScore }) {
             {category.category} ({(category.weight * 100).toFixed(0)}%)
           </span>
           <div className="flex items-center gap-2">
-            <span className="text-xs font-bold tabular-nums" style={{ color: signalColors[category.signal] }}>
+            <span className="text-xs font-bold tabular-nums transition-colors duration-500" style={{ color }}>
               {category.score > 0 ? "+" : ""}{category.score}
             </span>
+            <span className="text-[10px] text-[var(--color-text-muted)] hidden sm:inline">{label}</span>
             <svg width="12" height="12" viewBox="0 0 12 12" className={`transition-transform ${expanded ? "rotate-180" : ""}`}>
               <path d="M3 4.5L6 7.5L9 4.5" stroke="#64748b" strokeWidth="1.5" fill="none" strokeLinecap="round" />
             </svg>
@@ -128,23 +103,33 @@ function CategoryBar({ category }: { category: CategoryScore }) {
         </div>
         <div className="mt-1 h-1.5 w-full rounded-full bg-[var(--color-bg-primary)] overflow-hidden">
           <div className="h-full rounded-full transition-all duration-700"
-            style={{ width: `${pct}%`, background: `linear-gradient(90deg, #ef4444, #f59e0b, #22c55e)` }} />
+            style={{
+              width: `${pct}%`,
+              background: `linear-gradient(90deg, #dc2626, #ef4444, #f97316, #fb923c, #a3a3a3, #4ade80, #22c55e, #16a34a, #15803d)`,
+            }} />
         </div>
       </button>
 
       {expanded && (
         <div className="pl-2 space-y-1.5 animate-fade-in">
-          {category.indicators.map((ind) => (
-            <div key={ind.name} className="flex items-center justify-between text-[11px] py-1 px-2 rounded-lg bg-[var(--color-bg-primary)]/30">
-              <div>
-                <span className="text-[var(--color-text-muted)]">{ind.name}</span>
-                <p className="text-[10px] text-[var(--color-text-muted)]/60 mt-0.5 max-w-[200px] truncate">{ind.description}</p>
+          {category.indicators.map((ind) => {
+            const indColor = getSignalColor(ind.score);
+            const indLabel = getScoreLabel(ind.score);
+            return (
+              <div key={ind.name} className="flex items-center justify-between text-[11px] py-1 px-2 rounded-lg bg-[var(--color-bg-primary)]/30">
+                <div>
+                  <span className="text-[var(--color-text-muted)]">{ind.name}</span>
+                  <p className="text-[10px] text-[var(--color-text-muted)]/60 mt-0.5 max-w-[200px] truncate">{ind.description}</p>
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0 ml-2">
+                  <span className="text-[10px] text-[var(--color-text-muted)] hidden sm:inline">{indLabel}</span>
+                  <span className="font-bold tabular-nums transition-colors duration-500" style={{ color: indColor }}>
+                    {ind.score > 0 ? "+" : ""}{ind.score}
+                  </span>
+                </div>
               </div>
-              <span className="font-bold tabular-nums shrink-0 ml-2" style={{ color: signalColors[ind.signal] }}>
-                {ind.score > 0 ? "+" : ""}{ind.score}
-              </span>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>
@@ -152,19 +137,25 @@ function CategoryBar({ category }: { category: CategoryScore }) {
 }
 
 export default function AISignalPanel({ signal }: { signal: AISignalResult }) {
+  const info = getSignalInfo(signal.globalScore);
+
   return (
     <div className="space-y-6">
       {/* Main signal */}
       <div className="text-center">
         <ScoreGauge score={signal.globalScore} />
-        <div className="mt-2 inline-flex items-center gap-2 rounded-xl px-4 py-2"
-          style={{ background: signalBg[signal.signal] }}>
-          <span className="h-2.5 w-2.5 rounded-full animate-live-pulse" style={{ backgroundColor: signalColors[signal.signal] }} />
-          <span className="text-sm font-bold tracking-wider" style={{ color: signalColors[signal.signal] }}>
-            {signalLabels[signal.signal]}
+        <div className="mt-2 inline-flex items-center gap-2 rounded-xl px-4 py-2 transition-colors duration-500"
+          style={{ background: info.bgColor }}>
+          <span className="h-2.5 w-2.5 rounded-full animate-live-pulse transition-colors duration-500" style={{ backgroundColor: info.color }} />
+          <span className="text-sm font-bold tracking-wider transition-colors duration-500"
+            style={{ color: info.color, textShadow: `0 0 12px ${info.color}40` }}>
+            <span className="hidden sm:inline">{info.emoji} </span>{info.label}
           </span>
         </div>
-        <p className="mt-2 text-xs text-[var(--color-text-muted)]">
+        <p className="mt-2 text-xs text-[var(--color-text-muted)] italic max-w-xs mx-auto">
+          {info.description}
+        </p>
+        <p className="mt-1 text-xs text-[var(--color-text-muted)]">
           Confiance: <span className="text-white font-semibold">{signal.confidence}%</span>
         </p>
       </div>

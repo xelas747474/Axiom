@@ -16,10 +16,10 @@ import { obv, vwap, volumeSMA, adLine } from "./volume";
 import { fibonacci, pivotPoints, swingSupportResistance } from "./support";
 
 function toSignal(score: number): SignalStrength {
-  if (score > 70) return "STRONG_BUY";
-  if (score > 30) return "BUY";
-  if (score > -30) return "NEUTRAL";
-  if (score > -70) return "SELL";
+  if (score > 60) return "STRONG_BUY";
+  if (score > 20) return "BUY";
+  if (score > -20) return "NEUTRAL";
+  if (score > -60) return "SELL";
   return "STRONG_SELL";
 }
 
