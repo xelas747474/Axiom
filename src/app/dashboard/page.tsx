@@ -7,6 +7,7 @@ import Button from "@/components/Button";
 import AISummaryBlock from "@/components/AISummaryBlock";
 import AlertItem from "@/components/AlertItem";
 import ChartContainer from "@/components/ChartContainer";
+import { useAuth } from "@/lib/auth";
 import {
   type CryptoAsset,
   type Alert as AlertType,
@@ -57,6 +58,7 @@ interface MarketData {
 }
 
 export default function Dashboard() {
+  const { user } = useAuth();
   const [data, setData] = useState<MarketData | null>(null);
   const [loading, setLoading] = useState(true);
   const [isLive, setIsLive] = useState(false);
@@ -151,15 +153,31 @@ export default function Dashboard() {
       <section className="text-center py-16 animate-fade-in-up relative">
         {/* Background decorations */}
         <div className="pointer-events-none absolute left-1/2 top-0 -translate-x-1/2 h-64 w-96 rounded-full bg-[var(--color-accent-blue)]/5 blur-[100px]" />
-        <h1 className="relative text-4xl font-bold tracking-tight text-white sm:text-5xl lg:text-6xl">
-          Axiom —{" "}
-          <span className="bg-gradient-to-r from-[var(--color-accent-blue)] via-[var(--color-accent-purple)] to-[var(--color-accent-cyan)] bg-clip-text text-transparent gradient-text-animated bg-[length:200%_auto]">
-            AI Crypto Intelligence
-          </span>
-        </h1>
-        <p className="relative mt-5 text-lg text-[var(--color-text-secondary)] max-w-2xl mx-auto animate-fade-in" style={{ animationDelay: "200ms" }}>
-          Comprends le marché crypto en temps réel grâce à l&apos;IA
-        </p>
+        {user ? (
+          <>
+            <h1 className="relative text-4xl font-bold tracking-tight text-white sm:text-5xl lg:text-6xl">
+              Bonjour {user.name.split(" ")[0]}{" "}
+              <span className="bg-gradient-to-r from-[var(--color-accent-blue)] via-[var(--color-accent-purple)] to-[var(--color-accent-cyan)] bg-clip-text text-transparent gradient-text-animated bg-[length:200%_auto]">
+                !
+              </span>
+            </h1>
+            <p className="relative mt-5 text-lg text-[var(--color-text-secondary)] max-w-2xl mx-auto animate-fade-in" style={{ animationDelay: "200ms" }}>
+              Votre tableau de bord crypto — signaux IA en temps réel
+            </p>
+          </>
+        ) : (
+          <>
+            <h1 className="relative text-4xl font-bold tracking-tight text-white sm:text-5xl lg:text-6xl">
+              Axiom —{" "}
+              <span className="bg-gradient-to-r from-[var(--color-accent-blue)] via-[var(--color-accent-purple)] to-[var(--color-accent-cyan)] bg-clip-text text-transparent gradient-text-animated bg-[length:200%_auto]">
+                AI Crypto Intelligence
+              </span>
+            </h1>
+            <p className="relative mt-5 text-lg text-[var(--color-text-secondary)] max-w-2xl mx-auto animate-fade-in" style={{ animationDelay: "200ms" }}>
+              Comprends le marché crypto en temps réel grâce à l&apos;IA
+            </p>
+          </>
+        )}
         <div className="relative mt-10 flex items-center justify-center gap-4 animate-fade-in" style={{ animationDelay: "400ms" }}>
           <Link href="#market-overview">
             <Button variant="primary" size="lg">

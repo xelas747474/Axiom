@@ -8,6 +8,7 @@ import AISignalPanel from "@/components/AISignalPanel";
 import SignalScreener from "@/components/SignalScreener";
 import { fetchOHLCV } from "@/lib/binance";
 import { computeAISignal } from "@/lib/indicators/scoring";
+import { useAuth } from "@/lib/auth";
 import {
   SUPPORTED_CRYPTOS,
   TIMEFRAMES,
@@ -29,8 +30,13 @@ interface ScreenerEntry {
 }
 
 export default function TradingPage() {
-  const [selectedSymbol, setSelectedSymbol] = useState<CryptoSymbol>("BTCUSDT");
-  const [selectedTimeframe, setSelectedTimeframe] = useState<TimeframeLabel>("1D");
+  const { user, updatePreferences } = useAuth();
+  const [selectedSymbol, setSelectedSymbol] = useState<CryptoSymbol>(
+    (user?.preferences.lastCrypto as CryptoSymbol) || "BTCUSDT"
+  );
+  const [selectedTimeframe, setSelectedTimeframe] = useState<TimeframeLabel>(
+    (user?.preferences.lastTimeframe as TimeframeLabel) || "1D"
+  );
   const [candles, setCandles] = useState<OHLCV[]>([]);
   const [signal, setSignal] = useState<AISignalResult | null>(null);
   const [screenerSignals, setScreenerSignals] = useState<Record<string, ScreenerEntry>>({});
@@ -59,6 +65,13 @@ export default function TradingPage() {
       setLoading(false);
     }
   }, []);
+
+  // Save last selection to preferences
+  useEffect(() => {
+    if (user) {
+      updatePreferences({ lastCrypto: selectedSymbol, lastTimeframe: selectedTimeframe });
+    }
+  }, [selectedSymbol, selectedTimeframe, user, updatePreferences]);
 
   // Load main chart data
   useEffect(() => {
