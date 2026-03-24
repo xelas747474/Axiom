@@ -2,22 +2,7 @@
 
 import { SUPPORTED_CRYPTOS } from "@/lib/indicators/types";
 import type { SignalStrength } from "@/lib/indicators/types";
-
-const signalColors: Record<string, string> = {
-  STRONG_BUY: "#22c55e",
-  BUY: "#4ade80",
-  NEUTRAL: "#64748b",
-  SELL: "#f87171",
-  STRONG_SELL: "#ef4444",
-};
-
-const signalLabels: Record<string, string> = {
-  STRONG_BUY: "S.BUY",
-  BUY: "BUY",
-  NEUTRAL: "HOLD",
-  SELL: "SELL",
-  STRONG_SELL: "S.SELL",
-};
+import { getSignalInfo } from "@/lib/signals";
 
 interface CryptoSelectorProps {
   selected: string;
@@ -31,6 +16,7 @@ export default function CryptoSelector({ selected, onSelect, signals }: CryptoSe
       {SUPPORTED_CRYPTOS.map((crypto) => {
         const isActive = selected === crypto.symbol;
         const sig = signals?.[crypto.symbol];
+        const info = sig ? getSignalInfo(sig.score) : null;
 
         return (
           <button
@@ -43,11 +29,12 @@ export default function CryptoSelector({ selected, onSelect, signals }: CryptoSe
             }`}
           >
             <span className="font-bold">{crypto.label}</span>
-            {sig && (
-              <span className="flex items-center gap-1">
-                <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: signalColors[sig.signal] }} />
-                <span className="tabular-nums text-[10px] font-bold" style={{ color: signalColors[sig.signal] }}>
-                  {signalLabels[sig.signal]}
+            {info && (
+              <span className="flex items-center gap-1 transition-colors duration-500">
+                <span className="h-1.5 w-1.5 rounded-full transition-colors duration-500" style={{ backgroundColor: info.color }} />
+                <span className="tabular-nums text-[10px] font-bold transition-colors duration-500"
+                  style={{ color: info.color, textShadow: `0 0 8px ${info.color}25` }}>
+                  <span className="hidden sm:inline">{info.emoji} </span>{info.label}
                 </span>
               </span>
             )}

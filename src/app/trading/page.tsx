@@ -67,11 +67,14 @@ export default function TradingPage() {
   }, []);
 
   // Save last selection to preferences
+  const userRef = useRef(user);
+  userRef.current = user;
   useEffect(() => {
-    if (user) {
+    if (userRef.current) {
       updatePreferences({ lastCrypto: selectedSymbol, lastTimeframe: selectedTimeframe });
     }
-  }, [selectedSymbol, selectedTimeframe, user, updatePreferences]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedSymbol, selectedTimeframe]);
 
   // Load main chart data
   useEffect(() => {
