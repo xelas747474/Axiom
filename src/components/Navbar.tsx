@@ -152,6 +152,20 @@ export default function Navbar() {
                   Alertes
                 </Link>
 
+                {user.role === "admin" && (
+                  <Link
+                    href="/admin"
+                    onClick={() => setDropdownOpen(false)}
+                    className="flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-orange-400 transition-all duration-200 hover:bg-orange-500/10"
+                  >
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                      <path d="M8 1.5l1.3 2.6 2.9.4-2.1 2 .5 2.9L8 8l-2.6 1.4.5-2.9-2.1-2 2.9-.4z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                      <circle cx="8" cy="13" r="1.5" stroke="currentColor" strokeWidth="1.5" />
+                    </svg>
+                    Admin Panel
+                  </Link>
+                )}
+
                 <div className="my-1.5 border-t border-[var(--color-border-subtle)]/50" />
 
                 <button
