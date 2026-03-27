@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, Component, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import BotHeader from "@/components/bot/BotHeader";
@@ -11,6 +11,26 @@ import BotPositions from "@/components/bot/BotPositions";
 import BotHistory from "@/components/bot/BotHistory";
 import BotLogs from "@/components/bot/BotLogs";
 import BotAnalytics from "@/components/bot/BotAnalytics";
+
+class ErrorBoundary extends Component<{ children: ReactNode; label: string }, { hasError: boolean }> {
+  constructor(props: { children: ReactNode; label: string }) {
+    super(props);
+    this.state = { hasError: false };
+  }
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="rounded-xl border border-red-500/20 bg-red-500/5 p-6 text-center">
+          <p className="text-sm text-red-400">Erreur de chargement : {this.props.label}</p>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 export default function BotPage() {
   const { user, loading } = useAuth();
@@ -43,14 +63,14 @@ export default function BotPage() {
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 space-y-6">
-      <BotHeader />
-      <BotStats />
-      <BotPortfolioChart />
-      <BotConfig />
-      <BotPositions />
-      <BotHistory />
-      <BotAnalytics />
-      <BotLogs />
+      <ErrorBoundary label="Header"><BotHeader /></ErrorBoundary>
+      <ErrorBoundary label="Stats"><BotStats /></ErrorBoundary>
+      <ErrorBoundary label="Portfolio"><BotPortfolioChart /></ErrorBoundary>
+      <ErrorBoundary label="Config"><BotConfig /></ErrorBoundary>
+      <ErrorBoundary label="Positions"><BotPositions /></ErrorBoundary>
+      <ErrorBoundary label="Historique"><BotHistory /></ErrorBoundary>
+      <ErrorBoundary label="Analytics"><BotAnalytics /></ErrorBoundary>
+      <ErrorBoundary label="Logs"><BotLogs /></ErrorBoundary>
     </div>
   );
 }

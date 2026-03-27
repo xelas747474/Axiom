@@ -52,6 +52,7 @@ function squarify(
 
   while (remaining.length > 0) {
     const remainingTotal = remaining.reduce((sum, i) => sum + i.value, 0);
+    if (remainingTotal === 0) break;
     const isHorizontal = cw >= ch;
 
     // Take items for current row
@@ -91,7 +92,7 @@ function squarify(
 
     let offset = 0;
     for (const item of row) {
-      const frac = item.value / rowTotal;
+      const frac = rowTotal > 0 ? item.value / rowTotal : 0;
       if (isHorizontal) {
         rects.push({ symbol: item.symbol, x: cx, y: cy + offset * ch, w: sideLen, h: ch * frac, index: item.index });
         offset += frac;
