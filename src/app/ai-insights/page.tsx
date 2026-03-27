@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import Card from "@/components/Card";
 import MarketHeatmap from "@/components/insights/MarketHeatmap";
 import FearGreedSection from "@/components/insights/FearGreedSection";
@@ -65,33 +65,55 @@ interface MarketOverview {
 
 function SkeletonBlock({ className = "" }: { className?: string }) {
   return (
-    <div className={`animate-pulse rounded-xl bg-white/[0.03] ${className}`}>
-      <div className="h-full w-full rounded-xl bg-gradient-to-r from-transparent via-white/[0.03] to-transparent" style={{ animation: "shimmer 2s infinite" }} />
-    </div>
+    <div className={`animate-pulse rounded-xl bg-white/[0.03] ${className}`} />
   );
 }
 
 export default function AIInsightsPage() {
   const [data, setData] = useState<MarketOverview | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
+  const retryCount = useRef(0);
 
   const fetchData = useCallback(async () => {
     try {
-      const res = await fetch("/api/market/overview", { signal: AbortSignal.timeout(12000) });
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 15000);
+
+      const res = await fetch("/api/market/overview", { signal: controller.signal });
+      clearTimeout(timeoutId);
+
       if (res.ok) {
         const json = await res.json();
-        setData(json);
+        // Validate that we got meaningful data
+        if (json && json.heatmapCoins && json.aiScores) {
+          setData(json);
+          setError(false);
+          retryCount.current = 0;
+        }
+      } else {
+        throw new Error(`HTTP ${res.status}`);
       }
     } catch {
-      // Keep existing data on error
+      // Auto-retry up to 3 times with backoff
+      if (retryCount.current < 3 && !data) {
+        retryCount.current++;
+        const delay = retryCount.current * 2000;
+        setTimeout(fetchData, delay);
+        return;
+      }
+      if (!data) setError(true);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [data]);
 
   useEffect(() => {
     fetchData();
-    const interval = setInterval(fetchData, 60000); // Refresh every 60s
+    const interval = setInterval(() => {
+      retryCount.current = 0;
+      fetchData();
+    }, 60000);
     return () => clearInterval(interval);
   }, [fetchData]);
 
@@ -100,7 +122,9 @@ export default function AIInsightsPage() {
       {/* ============ HEADER ============ */}
       <section className="text-center py-6 relative">
         <div className="pointer-events-none absolute left-1/2 top-0 -translate-x-1/2 h-48 w-72 rounded-full bg-[var(--color-accent-purple)]/5 blur-[80px]" />
-        <div className="relative inline-flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-[var(--color-accent-blue)] to-[var(--color-accent-purple)] mb-4 shadow-lg shadow-[var(--color-accent-blue)]/25" style={{ animation: "float 3s ease-in-out infinite" }}>
+        <div
+          className="relative inline-flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-[var(--color-accent-blue)] to-[var(--color-accent-purple)] mb-4 shadow-lg shadow-[var(--color-accent-blue)]/25 animate-float"
+        >
           <span className="text-2xl">🧠</span>
         </div>
         <h1 className="relative text-3xl font-bold tracking-tight text-white sm:text-4xl">
@@ -115,6 +139,23 @@ export default function AIInsightsPage() {
             <span className="text-xs text-green-400 font-medium">Données en direct</span>
           </div>
         )}
+        {loading && !data && (
+          <div className="mt-4 flex justify-center items-center gap-2">
+            <span className="h-2 w-2 rounded-full bg-blue-400 animate-pulse" />
+            <span className="text-xs text-gray-400">Chargement des données...</span>
+          </div>
+        )}
+        {error && !data && (
+          <div className="mt-4 flex flex-col items-center gap-2">
+            <span className="text-xs text-red-400">Impossible de charger les données</span>
+            <button
+              onClick={() => { retryCount.current = 0; setLoading(true); setError(false); fetchData(); }}
+              className="text-xs text-blue-400 underline hover:text-blue-300"
+            >
+              Réessayer
+            </button>
+          </div>
+        )}
       </section>
 
       {/* ============ AI REPORT ============ */}
@@ -125,7 +166,7 @@ export default function AIInsightsPage() {
       {/* ============ HEATMAP + FEAR & GREED (2 cols) ============ */}
       <div className="grid gap-6 lg:grid-cols-2">
         <Card highlight>
-          {loading || !data ? (
+          {!data ? (
             <div>
               <div className="h-6 w-40 rounded bg-white/5 mb-4" />
               <SkeletonBlock className="h-[350px]" />
@@ -136,7 +177,7 @@ export default function AIInsightsPage() {
         </Card>
 
         <Card highlight>
-          {loading || !data ? (
+          {!data ? (
             <div>
               <div className="h-6 w-64 rounded bg-white/5 mb-4" />
               <SkeletonBlock className="h-[350px]" />
@@ -152,7 +193,7 @@ export default function AIInsightsPage() {
 
       {/* ============ AI SCORE CARDS ============ */}
       <Card highlight>
-        {loading || !data ? (
+        {!data ? (
           <div>
             <div className="h-6 w-56 rounded bg-white/5 mb-4" />
             <div className="grid gap-4 md:grid-cols-3">
@@ -167,7 +208,7 @@ export default function AIInsightsPage() {
       {/* ============ RADAR + CORRELATION (2 cols) ============ */}
       <div className="grid gap-6 lg:grid-cols-2">
         <Card highlight>
-          {loading || !data ? (
+          {!data ? (
             <div>
               <div className="h-6 w-72 rounded bg-white/5 mb-4" />
               <SkeletonBlock className="h-[340px]" />
@@ -184,7 +225,7 @@ export default function AIInsightsPage() {
         </Card>
 
         <Card highlight>
-          {loading || !data ? (
+          {!data ? (
             <div>
               <div className="h-6 w-60 rounded bg-white/5 mb-4" />
               <SkeletonBlock className="h-[340px]" />
@@ -197,7 +238,7 @@ export default function AIInsightsPage() {
 
       {/* ============ EVENTS TIMELINE ============ */}
       <Card highlight>
-        {loading || !data ? (
+        {!data ? (
           <div>
             <div className="h-6 w-64 rounded bg-white/5 mb-4" />
             <div className="space-y-3">
@@ -212,18 +253,6 @@ export default function AIInsightsPage() {
           />
         )}
       </Card>
-
-      {/* Shimmer keyframe (inline for simplicity) */}
-      <style jsx global>{`
-        @keyframes shimmer {
-          0% { transform: translateX(-100%); }
-          100% { transform: translateX(100%); }
-        }
-        @keyframes float {
-          0%, 100% { transform: translateY(0px); }
-          50% { transform: translateY(-8px); }
-        }
-      `}</style>
     </div>
   );
 }
