@@ -105,7 +105,7 @@ async function fetchSafe<T>(url: string): Promise<T | null> {
 
     const res = await fetch(url, {
       signal: controller.signal,
-      next: { revalidate: 30 }, // Let Next.js cache for 30s — avoids rate limit hammering
+      cache: "no-store",
       headers: { Accept: "application/json" },
     });
 

@@ -5,7 +5,7 @@ import {
   aiMarketSummary as mockSummary,
 } from "@/data/mock";
 
-export const revalidate = 30; // ISR: refresh every 30s
+export const dynamic = "force-dynamic";
 
 export async function GET() {
   let market: MarketDataResult;
