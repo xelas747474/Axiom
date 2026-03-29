@@ -135,7 +135,8 @@ export default function MarketHeatmap({ coins }: { coins: HeatmapCoin[] }) {
   }, []);
 
   const sorted = [...coins].sort((a, b) => b.marketCap - a.marketCap);
-  const items = sorted.map((c, i) => ({ symbol: c.symbol, value: c.marketCap, index: i }));
+  // Use sqrt(marketCap) so BTC doesn't dominate 90% of the space
+  const items = sorted.map((c, i) => ({ symbol: c.symbol, value: Math.sqrt(c.marketCap), index: i }));
   const rects = squarify(items, 0, 0, dimensions.width, dimensions.height);
 
   return (
@@ -153,9 +154,9 @@ export default function MarketHeatmap({ coins }: { coins: HeatmapCoin[] }) {
             const coin = sorted[rect.index];
             const isHovered = hoveredIndex === rect.index;
             const minDim = Math.min(rect.w, rect.h);
-            const showPrice = minDim > 50;
-            const showChange = minDim > 40;
-            const fontSize = Math.max(9, Math.min(14, minDim / 6));
+            const showPrice = minDim > 35;
+            const showChange = minDim > 28;
+            const fontSize = Math.max(8, Math.min(14, minDim / 5));
 
             return (
               <g
