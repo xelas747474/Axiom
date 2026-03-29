@@ -149,10 +149,22 @@ export default function AIInsightsPage() {
         <p className="relative mt-3 text-[var(--color-text-secondary)] max-w-xl mx-auto">
           Intelligence artificielle appliquée à l&apos;analyse des marchés crypto — données en direct, signaux avancés et rapport IA généré.
         </p>
-        {data?.isLive && (
-          <div className="mt-3 flex justify-center items-center gap-2">
-            <span className="h-2 w-2 rounded-full bg-green-400 animate-pulse" />
-            <span className="text-xs text-green-400 font-medium">Données en direct</span>
+        {data && (
+          <div className="mt-3 flex justify-center items-center gap-3">
+            {data.isLive ? (
+              <>
+                <span className="h-2 w-2 rounded-full bg-green-400 animate-pulse" />
+                <span className="text-xs text-green-400 font-medium">Données en direct</span>
+              </>
+            ) : (
+              <>
+                <span className="h-2 w-2 rounded-full bg-yellow-400" />
+                <span className="text-xs text-yellow-400 font-medium">Données en cache</span>
+              </>
+            )}
+            <span className="text-xs text-gray-500">
+              Mise à jour : {new Date(data.timestamp).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}
+            </span>
           </div>
         )}
         {loading && !data && (

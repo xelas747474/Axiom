@@ -1,12 +1,13 @@
 // ============================================
 // GET /api/market/overview
 // Centralized market data for AI Insights page
-// Reuses fetchMarketData() + one additional CoinGecko call for heatmap
+// Uses Redis cache for resilience on Vercel serverless
 // ============================================
 
 import { fetchMarketData, FALLBACK_MARKET_DATA, type MarketDataResult } from "@/lib/coingecko";
+import { getRedis } from "@/lib/redis";
 
-export const revalidate = 30;
+export const dynamic = "force-dynamic";
 
 const COINGECKO_BASE = "https://api.coingecko.com/api/v3";
 
@@ -29,17 +30,16 @@ interface FngEntry {
   value_classification: string;
 }
 
-// In-memory cache to avoid re-fetching on rate-limit
-let overviewCache: { data: unknown; ts: number } | null = null;
-const CACHE_TTL = 25_000;
+const REDIS_CACHE_KEY = "axiom:cache:market-overview";
+const REDIS_CACHE_TTL = 45; // seconds
 
-async function fetchSafe<T>(url: string, timeoutMs = 5000): Promise<T | null> {
+async function fetchFresh<T>(url: string, timeoutMs = 6000): Promise<T | null> {
   try {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
     const res = await fetch(url, {
       signal: controller.signal,
-      next: { revalidate: 30 },
+      cache: "no-store",
       headers: { Accept: "application/json" },
     });
     clearTimeout(timeoutId);
@@ -52,27 +52,20 @@ async function fetchSafe<T>(url: string, timeoutMs = 5000): Promise<T | null> {
 
 const HEATMAP_IDS = "bitcoin,ethereum,solana,binancecoin,ripple,cardano,avalanche-2,chainlink,polkadot,matic-network";
 
-// Fallback heatmap data when CoinGecko is unavailable
-const FALLBACK_HEATMAP = [
-  { id: "bitcoin", symbol: "BTC", name: "Bitcoin", price: 67842, change1h: 0.1, change24h: 2.3, change7d: 5.1, marketCap: 1330e9, volume: 28e9, sparkline7d: [] },
-  { id: "ethereum", symbol: "ETH", name: "Ethereum", price: 3521, change1h: -0.2, change24h: -0.9, change7d: 3.2, marketCap: 423e9, volume: 15e9, sparkline7d: [] },
-  { id: "solana", symbol: "SOL", name: "Solana", price: 178, change1h: 0.5, change24h: 8.6, change7d: 12.3, marketCap: 82e9, volume: 4e9, sparkline7d: [] },
-  { id: "binancecoin", symbol: "BNB", name: "BNB", price: 612, change1h: 0.1, change24h: 1.2, change7d: 2.1, marketCap: 92e9, volume: 1.8e9, sparkline7d: [] },
-  { id: "ripple", symbol: "XRP", name: "XRP", price: 0.62, change1h: -0.3, change24h: -1.5, change7d: 0.8, marketCap: 34e9, volume: 1.2e9, sparkline7d: [] },
-  { id: "cardano", symbol: "ADA", name: "Cardano", price: 0.57, change1h: 0.0, change24h: -3.5, change7d: -2.1, marketCap: 20e9, volume: 0.5e9, sparkline7d: [] },
-  { id: "avalanche-2", symbol: "AVAX", name: "Avalanche", price: 42, change1h: 0.8, change24h: 6.2, change7d: 8.4, marketCap: 16e9, volume: 0.8e9, sparkline7d: [] },
-  { id: "chainlink", symbol: "LINK", name: "Chainlink", price: 19, change1h: 0.2, change24h: 5.1, change7d: 7.2, marketCap: 11e9, volume: 0.6e9, sparkline7d: [] },
-  { id: "polkadot", symbol: "DOT", name: "Polkadot", price: 7.9, change1h: -0.1, change24h: -3.0, change7d: -1.5, marketCap: 10e9, volume: 0.3e9, sparkline7d: [] },
-  { id: "matic-network", symbol: "MATIC", name: "Polygon", price: 0.72, change1h: 0.3, change24h: 2.1, change7d: 4.5, marketCap: 7e9, volume: 0.4e9, sparkline7d: [] },
-];
-
 export async function GET() {
-  // Return cached if fresh
-  if (overviewCache && Date.now() - overviewCache.ts < CACHE_TTL) {
-    return Response.json(overviewCache.data);
+  const redis = getRedis();
+
+  // Try Redis cache first (survives cold starts)
+  try {
+    const cached = await redis.get<{ data: unknown; ts: number }>(REDIS_CACHE_KEY);
+    if (cached && cached.data && Date.now() - cached.ts < REDIS_CACHE_TTL * 1000) {
+      return Response.json(cached.data);
+    }
+  } catch {
+    // Redis unavailable, continue to fetch
   }
 
-  // Fetch base market data (already has its own cache + fallback)
+  // Fetch base market data
   let market: MarketDataResult;
   try {
     market = await fetchMarketData();
@@ -80,43 +73,56 @@ export async function GET() {
     market = FALLBACK_MARKET_DATA;
   }
 
-  // Fetch heatmap coins + F&G history in parallel (just 2 extra calls)
+  // Fetch heatmap coins + F&G history in parallel
   const [coinsDetailed, fngHistory] = await Promise.all([
-    fetchSafe<CoinMarketData[]>(
+    fetchFresh<CoinMarketData[]>(
       `${COINGECKO_BASE}/coins/markets?vs_currency=usd&ids=${HEATMAP_IDS}&order=market_cap_desc&sparkline=true&price_change_percentage=1h,24h,7d`
     ),
-    fetchSafe<{ data: FngEntry[] }>(
+    fetchFresh<{ data: FngEntry[] }>(
       "https://api.alternative.me/fng/?limit=30"
     ),
   ]);
 
-  // Process heatmap coins with fallback
-  const heatmapCoins = coinsDetailed && coinsDetailed.length > 0
-    ? coinsDetailed.map((c) => ({
-        id: c.id,
-        symbol: c.symbol.toUpperCase(),
-        name: c.name,
-        price: c.current_price,
-        change1h: Math.round((c.price_change_percentage_1h_in_currency ?? 0) * 100) / 100,
-        change24h: Math.round((c.price_change_percentage_24h ?? 0) * 100) / 100,
-        change7d: Math.round((c.price_change_percentage_7d_in_currency ?? 0) * 100) / 100,
-        marketCap: c.market_cap,
-        volume: c.total_volume,
-        sparkline7d: c.sparkline_in_7d?.price ?? [],
-      }))
-    : FALLBACK_HEATMAP;
+  // Process heatmap coins — use live data or try Redis fallback
+  let heatmapCoins;
+  if (coinsDetailed && coinsDetailed.length > 0) {
+    heatmapCoins = coinsDetailed.map((c) => ({
+      id: c.id,
+      symbol: c.symbol.toUpperCase(),
+      name: c.name,
+      price: c.current_price,
+      change1h: Math.round((c.price_change_percentage_1h_in_currency ?? 0) * 100) / 100,
+      change24h: Math.round((c.price_change_percentage_24h ?? 0) * 100) / 100,
+      change7d: Math.round((c.price_change_percentage_7d_in_currency ?? 0) * 100) / 100,
+      marketCap: c.market_cap,
+      volume: c.total_volume,
+      sparkline7d: c.sparkline_in_7d?.price ?? [],
+    }));
+  } else {
+    // Try to get last known heatmap from Redis
+    try {
+      const stale = await redis.get<{ data: { heatmapCoins: typeof heatmapCoins } }>(REDIS_CACHE_KEY);
+      heatmapCoins = stale?.data?.heatmapCoins;
+    } catch {
+      // ignore
+    }
+    if (!heatmapCoins) {
+      // Last resort: use market data prices for BTC/ETH/SOL
+      heatmapCoins = buildHeatmapFromMarket(market);
+    }
+  }
 
-  // Fear & Greed history (30 days) with empty fallback
+  // Fear & Greed history
   const fngHistoryData = (fngHistory?.data ?? []).map((d) => ({
     value: parseInt(d.value, 10),
     timestamp: parseInt(d.timestamp, 10) * 1000,
     classification: d.value_classification,
   }));
 
-  // Compute simplified AI scores for BTC, ETH, SOL
+  // Compute AI scores
   const mainCryptos = ["bitcoin", "ethereum", "solana"];
   const aiScores = mainCryptos.map((id) => {
-    const coin = heatmapCoins.find((c) => c.id === id);
+    const coin = heatmapCoins!.find((c: { id: string }) => c.id === id);
     if (!coin) {
       const sym = id === "bitcoin" ? "BTC" : id === "ethereum" ? "ETH" : "SOL";
       return { id, symbol: sym, name: sym, price: 0, change24h: 0, change7d: 0, sparkline7d: [] as number[], score: 0, categories: getDefaultCategories(), entryPrice: 0, stopLoss: 0, takeProfit: 0 };
@@ -124,7 +130,7 @@ export async function GET() {
 
     const trend = computeTrendScore(coin);
     const momentum = computeMomentumScore(coin);
-    const volume = computeVolumeScore(coin, heatmapCoins);
+    const volume = computeVolumeScore(coin, heatmapCoins!);
     const volatility = computeVolatilityScore(coin);
     const sentiment = computeSentimentScore(coin, market.fearGreedIndex);
 
@@ -149,18 +155,52 @@ export async function GET() {
     };
   });
 
+  const isLive = coinsDetailed !== null && coinsDetailed.length > 0;
+
   const result = {
     ...market,
+    isLive,
     heatmapCoins,
     fngHistory: fngHistoryData,
     aiScores,
     timestamp: Date.now(),
   };
 
-  // Cache the result
-  overviewCache = { data: result, ts: Date.now() };
+  // Save to Redis for next cold start
+  try {
+    await redis.set(REDIS_CACHE_KEY, JSON.stringify({ data: result, ts: Date.now() }), { ex: REDIS_CACHE_TTL * 3 });
+  } catch {
+    // Non-critical
+  }
 
   return Response.json(result);
+}
+
+// Build minimal heatmap from market data when CoinGecko coins/markets fails
+function buildHeatmapFromMarket(market: MarketDataResult) {
+  const allCoins = [...market.topGainers, ...market.topLosers];
+  const btc = { id: "bitcoin", symbol: "BTC", name: "Bitcoin", price: market.bitcoin.price, change1h: 0, change24h: market.bitcoin.change24h, change7d: 0, marketCap: market.bitcoin.price * 19e6, volume: 30e9, sparkline7d: [] as number[] };
+  const eth = { id: "ethereum", symbol: "ETH", name: "Ethereum", price: market.ethereum.price, change1h: 0, change24h: market.ethereum.change24h, change7d: 0, marketCap: market.ethereum.price * 120e6, volume: 15e9, sparkline7d: [] as number[] };
+  const sol = allCoins.find(c => c.symbol === "SOL");
+  const solEntry = { id: "solana", symbol: "SOL", name: "Solana", price: sol?.price ?? 0, change1h: 0, change24h: sol?.change24h ?? 0, change7d: 0, marketCap: (sol?.price ?? 0) * 440e6, volume: 4e9, sparkline7d: [] as number[] };
+
+  const extras = allCoins
+    .filter(c => !["BTC", "ETH", "SOL"].includes(c.symbol))
+    .slice(0, 7)
+    .map(c => ({
+      id: c.name.toLowerCase().replace(/\s/g, "-"),
+      symbol: c.symbol,
+      name: c.name,
+      price: c.price,
+      change1h: 0,
+      change24h: c.change24h,
+      change7d: 0,
+      marketCap: c.price * 100e6,
+      volume: 1e9,
+      sparkline7d: [] as number[],
+    }));
+
+  return [btc, eth, solEntry, ...extras];
 }
 
 function sampleArray(arr: number[], n: number): number[] {
