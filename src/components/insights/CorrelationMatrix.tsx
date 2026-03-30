@@ -70,10 +70,12 @@ export default function CorrelationMatrix({ coins }: { coins: HeatmapCoin[] }) {
   // Find the 3 main cryptos
   const mainCoins = SYMBOLS.map(s => coins.find(c => c.symbol === s)).filter(Boolean) as HeatmapCoin[];
 
-  // Compute correlation matrix
-  const matrix: number[][] = mainCoins.map((coin1, i) =>
+  // Compute correlation matrix (null = insufficient data)
+  const matrix: (number | null)[][] = mainCoins.map((coin1, i) =>
     mainCoins.map((coin2, j) => {
       if (i === j) return 1;
+      // Need at least 5 data points in both sparklines
+      if (coin1.sparkline7d.length < 5 || coin2.sparkline7d.length < 5) return null;
       return pearsonCorrelation(coin1.sparkline7d, coin2.sparkline7d);
     })
   );
@@ -113,10 +115,11 @@ export default function CorrelationMatrix({ coins }: { coins: HeatmapCoin[] }) {
 
               {/* Cells */}
               {mainCoins.map((coin2, col) => {
-                const corr = matrix[row]?.[col] ?? 0;
+                const corr = matrix[row]?.[col] ?? null;
                 const isHovered = hoveredCell?.row === row && hoveredCell?.col === col;
                 const isDiagonal = row === col;
                 const cellDelay = (row * 3 + col) * 80;
+                const hasData = corr !== null;
 
                 return (
                   <div
@@ -126,7 +129,7 @@ export default function CorrelationMatrix({ coins }: { coins: HeatmapCoin[] }) {
                       width: cellSize,
                       height: cellSize,
                       marginLeft: col > 0 ? gap : 0,
-                      backgroundColor: animated ? getCorrelationColor(corr) : "rgba(255,255,255,0.03)",
+                      backgroundColor: animated && hasData ? getCorrelationColor(corr) : "rgba(255,255,255,0.03)",
                       transition: `background-color 0.6s ease ${cellDelay}ms, transform 0.15s ease, box-shadow 0.15s ease`,
                       transform: isHovered ? "scale(1.05)" : "scale(1)",
                       boxShadow: isHovered ? "0 0 15px rgba(59,130,246,0.3)" : "none",
@@ -139,12 +142,12 @@ export default function CorrelationMatrix({ coins }: { coins: HeatmapCoin[] }) {
                     <span
                       className="text-lg font-bold font-mono"
                       style={{
-                        color: isDiagonal ? "#3b82f6" : corr >= 0.5 ? "#ffffff" : "rgba(255,255,255,0.7)",
+                        color: !hasData ? "rgba(255,255,255,0.3)" : isDiagonal ? "#3b82f6" : corr >= 0.5 ? "#ffffff" : "rgba(255,255,255,0.7)",
                         opacity: animated ? 1 : 0,
                         transition: `opacity 0.4s ease ${cellDelay + 200}ms`,
                       }}
                     >
-                      {corr.toFixed(2)}
+                      {hasData ? corr.toFixed(2) : "N/A"}
                     </span>
 
                     {/* Hover tooltip */}
@@ -153,9 +156,18 @@ export default function CorrelationMatrix({ coins }: { coins: HeatmapCoin[] }) {
                         <span className="text-white font-semibold">{coin1.symbol}</span>
                         <span className="text-gray-400"> et </span>
                         <span className="text-white font-semibold">{coin2.symbol}</span>
-                        <span className="text-gray-400"> — corrélation {getCorrelationText(corr)}</span>
-                        <br />
-                        <span className="text-gray-500">Bougent ensemble {Math.round(Math.abs(corr) * 100)}% du temps</span>
+                        {hasData ? (
+                          <>
+                            <span className="text-gray-400"> — corrélation {getCorrelationText(corr)}</span>
+                            <br />
+                            <span className="text-gray-500">Bougent ensemble {Math.round(Math.abs(corr) * 100)}% du temps</span>
+                          </>
+                        ) : (
+                          <>
+                            <br />
+                            <span className="text-amber-400/80">Données insuffisantes pour le calcul</span>
+                          </>
+                        )}
                       </div>
                     )}
                   </div>

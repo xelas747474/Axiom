@@ -23,6 +23,7 @@ interface AIScoreData {
   entryPrice: number;
   stopLoss: number;
   takeProfit: number;
+  unavailable?: boolean;
 }
 
 const CRYPTO_COLORS: Record<string, string> = {
@@ -191,68 +192,88 @@ export default function AIScoreCards({ scores }: { scores: AIScoreData[] }) {
                     <span className="text-xs text-gray-500">{crypto.name}</span>
                   </div>
                   <div className="flex items-center gap-2 mt-0.5">
-                    <span className="text-sm font-mono text-white">
-                      ${crypto.price >= 1 ? crypto.price.toLocaleString("en-US", { maximumFractionDigits: 2 }) : crypto.price.toFixed(4)}
-                    </span>
-                    <span
-                      className="text-xs font-semibold"
-                      style={{ color: crypto.change24h >= 0 ? "#22c55e" : "#ef4444" }}
-                    >
-                      {crypto.change24h >= 0 ? "+" : ""}{crypto.change24h.toFixed(2)}%
-                    </span>
+                    {crypto.unavailable ? (
+                      <span className="text-xs text-amber-400/80 italic">Données temporairement indisponibles</span>
+                    ) : (
+                      <>
+                        <span className="text-sm font-mono text-white">
+                          ${crypto.price >= 1 ? crypto.price.toLocaleString("en-US", { maximumFractionDigits: 2 }) : crypto.price.toFixed(4)}
+                        </span>
+                        <span
+                          className="text-xs font-semibold"
+                          style={{ color: crypto.change24h >= 0 ? "#22c55e" : "#ef4444" }}
+                        >
+                          {crypto.change24h >= 0 ? "+" : ""}{crypto.change24h.toFixed(2)}%
+                        </span>
+                      </>
+                    )}
                   </div>
                 </div>
-                <MiniSparkline data={crypto.sparkline7d} color={accent} width={80} height={28} />
+                {!crypto.unavailable && (
+                  <MiniSparkline data={crypto.sparkline7d} color={accent} width={80} height={28} />
+                )}
               </div>
 
-              {/* Gauge + Signal */}
-              <div className="flex items-center gap-3 mb-3">
-                <ScoreGauge score={crypto.score} animated={animated} />
-                <div>
-                  <div
-                    className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-bold"
-                    style={{ backgroundColor: info.bgColor, color: info.color }}
-                  >
-                    {info.emoji} {info.label}
+              {crypto.unavailable ? (
+                <div className="flex flex-col items-center justify-center py-6 text-center">
+                  <div className="text-2xl mb-2 opacity-40">⏳</div>
+                  <p className="text-xs text-gray-500">
+                    Les données de {crypto.name} sont temporairement<br />indisponibles (rate-limit API)
+                  </p>
+                  <p className="text-[10px] text-gray-600 mt-1">Rechargez dans quelques secondes</p>
+                </div>
+              ) : (
+                <>
+                  {/* Gauge + Signal */}
+                  <div className="flex items-center gap-3 mb-3">
+                    <ScoreGauge score={crypto.score} animated={animated} />
+                    <div>
+                      <div
+                        className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-bold"
+                        style={{ backgroundColor: info.bgColor, color: info.color }}
+                      >
+                        {info.emoji} {info.label}
+                      </div>
+                      <p className="text-[10px] text-gray-500 mt-1 max-w-[120px]">{info.description}</p>
+                      <div
+                        className="text-lg font-bold font-mono mt-1"
+                        style={{ color: info.color, textShadow: `0 0 12px ${info.color}30` }}
+                      >
+                        {crypto.score > 0 ? "+" : ""}{crypto.score}
+                      </div>
+                    </div>
                   </div>
-                  <p className="text-[10px] text-gray-500 mt-1 max-w-[120px]">{info.description}</p>
-                  <div
-                    className="text-lg font-bold font-mono mt-1"
-                    style={{ color: info.color, textShadow: `0 0 12px ${info.color}30` }}
-                  >
-                    {crypto.score > 0 ? "+" : ""}{crypto.score}
+
+                  {/* Category breakdown */}
+                  <div className="space-y-1.5 mb-3">
+                    {crypto.categories.map((cat, i) => (
+                      <CategoryBar
+                        key={cat.category}
+                        category={cat.category}
+                        score={cat.score}
+                        animated={animated}
+                        delay={cardIdx * 150 + i * 80}
+                      />
+                    ))}
                   </div>
-                </div>
-              </div>
 
-              {/* Category breakdown */}
-              <div className="space-y-1.5 mb-3">
-                {crypto.categories.map((cat, i) => (
-                  <CategoryBar
-                    key={cat.category}
-                    category={cat.category}
-                    score={cat.score}
-                    animated={animated}
-                    delay={cardIdx * 150 + i * 80}
-                  />
-                ))}
-              </div>
-
-              {/* Entry / SL / TP */}
-              <div className="grid grid-cols-3 gap-2 pt-2 border-t border-white/5">
-                <div className="text-center">
-                  <div className="text-[9px] text-gray-500 uppercase">Entrée</div>
-                  <div className="text-xs font-mono text-blue-400">${crypto.entryPrice.toLocaleString("en-US", { maximumFractionDigits: 0 })}</div>
-                </div>
-                <div className="text-center">
-                  <div className="text-[9px] text-gray-500 uppercase">Stop Loss</div>
-                  <div className="text-xs font-mono text-red-400">${crypto.stopLoss.toLocaleString("en-US", { maximumFractionDigits: 0 })}</div>
-                </div>
-                <div className="text-center">
-                  <div className="text-[9px] text-gray-500 uppercase">Take Profit</div>
-                  <div className="text-xs font-mono text-green-400">${crypto.takeProfit.toLocaleString("en-US", { maximumFractionDigits: 0 })}</div>
-                </div>
-              </div>
+                  {/* Entry / SL / TP */}
+                  <div className="grid grid-cols-3 gap-2 pt-2 border-t border-white/5">
+                    <div className="text-center">
+                      <div className="text-[9px] text-gray-500 uppercase">Entrée</div>
+                      <div className="text-xs font-mono text-blue-400">${crypto.entryPrice.toLocaleString("en-US", { maximumFractionDigits: 0 })}</div>
+                    </div>
+                    <div className="text-center">
+                      <div className="text-[9px] text-gray-500 uppercase">Stop Loss</div>
+                      <div className="text-xs font-mono text-red-400">${crypto.stopLoss.toLocaleString("en-US", { maximumFractionDigits: 0 })}</div>
+                    </div>
+                    <div className="text-center">
+                      <div className="text-[9px] text-gray-500 uppercase">Take Profit</div>
+                      <div className="text-xs font-mono text-green-400">${crypto.takeProfit.toLocaleString("en-US", { maximumFractionDigits: 0 })}</div>
+                    </div>
+                  </div>
+                </>
+              )}
             </Link>
           );
         })}
