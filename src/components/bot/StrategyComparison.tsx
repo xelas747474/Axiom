@@ -4,15 +4,16 @@ import { useState, useCallback, useRef } from "react";
 import { STRATEGIES } from "@/lib/bot/types";
 import type { BotStrategy } from "@/lib/bot/types";
 import type { BacktestResult, BacktestStats } from "./BacktestPanel";
+import { runBacktestAsync } from "@/lib/backtest-engine";
 
 // ============================================
-// Strategy Comparison — 3 parallel backtests, winner display, comparison table, overlaid curves
+// Strategy Comparison — 3 sequential backtests, winner display, comparison table, overlaid curves
 // ============================================
 
 const STRATEGY_LIST: { key: BotStrategy; emoji: string; label: string; color: string }[] = [
-  { key: "conservative", emoji: "\u{1F6E1}\uFE0F", label: "Conservateur", color: "#3b82f6" },
-  { key: "balanced", emoji: "\u2696\uFE0F", label: "\u00c9quilibr\u00e9", color: "#a855f7" },
-  { key: "aggressive", emoji: "\u{1F525}", label: "Agressif", color: "#f59e0b" },
+  { key: "conservative", emoji: "🛡️", label: "Conservateur", color: "#3b82f6" },
+  { key: "balanced", emoji: "⚖️", label: "Équilibré", color: "#a855f7" },
+  { key: "aggressive", emoji: "🔥", label: "Agressif", color: "#f59e0b" },
 ];
 
 const PERIODS: { label: string; value: 30 | 90 | 180 | 365 }[] = [
@@ -27,6 +28,14 @@ const CRYPTOS: { id: "bitcoin" | "ethereum" | "solana"; label: string }[] = [
   { id: "ethereum", label: "ETH" },
   { id: "solana", label: "SOL" },
 ];
+
+const CRYPTO_LABELS: Record<string, string> = {
+  bitcoin: "BTC",
+  ethereum: "ETH",
+  solana: "SOL",
+};
+
+const TIMEOUT_MS = 30_000;
 
 function OverlaidChart({ results }: { results: BacktestResult[] }) {
   if (results.length === 0) return null;
@@ -79,7 +88,7 @@ function OverlaidChart({ results }: { results: BacktestResult[] }) {
 
       {/* Legend */}
       {results.map((r, i) => {
-        const s = STRATEGY_LIST.find((s) => s.key === r.config.strategy);
+        const s = STRATEGY_LIST.find((st) => st.key === r.config.strategy);
         if (!s) return null;
         const lx = PAD.left + 10 + i * 150;
         return (
@@ -100,12 +109,12 @@ function ComparisonTable({ results }: { results: BacktestResult[] }) {
     { label: "Rendement", key: "totalReturn", format: (v) => `${v >= 0 ? "+" : ""}${v.toFixed(2)}%`, higherBetter: true },
     { label: "Win Rate", key: "winRate", format: (v) => `${v.toFixed(1)}%`, higherBetter: true },
     { label: "Trades", key: "totalTrades", format: (v) => v.toString(), higherBetter: false },
-    { label: "Profit Factor", key: "profitFactor", format: (v) => v === Infinity ? "\u221E" : v.toFixed(2), higherBetter: true },
+    { label: "Profit Factor", key: "profitFactor", format: (v) => v === Infinity ? "∞" : v.toFixed(2), higherBetter: true },
     { label: "Sharpe Ratio", key: "sharpeRatio", format: (v) => v.toFixed(2), higherBetter: true },
     { label: "Max Drawdown", key: "maxDrawdown", format: (v) => `${v.toFixed(2)}%`, higherBetter: false },
     { label: "Gain Moyen", key: "avgWin", format: (v) => `${v.toFixed(2)}%`, higherBetter: true },
     { label: "Perte Moyenne", key: "avgLoss", format: (v) => `${v.toFixed(2)}%`, higherBetter: false },
-    { label: "Esp\u00e9rance", key: "expectedValue", format: (v) => `$${v.toFixed(2)}`, higherBetter: true },
+    { label: "Espérance", key: "expectedValue", format: (v) => `$${v.toFixed(2)}`, higherBetter: true },
   ];
 
   return (
@@ -113,9 +122,9 @@ function ComparisonTable({ results }: { results: BacktestResult[] }) {
       <table className="w-full text-xs">
         <thead>
           <tr className="border-b border-[var(--color-border-subtle)]">
-            <th className="text-left py-2 px-3 text-[var(--color-text-muted)] font-normal uppercase tracking-wider">M\u00e9trique</th>
+            <th className="text-left py-2 px-3 text-[var(--color-text-muted)] font-normal uppercase tracking-wider">Métrique</th>
             {results.map((r) => {
-              const s = STRATEGY_LIST.find((s) => s.key === r.config.strategy);
+              const s = STRATEGY_LIST.find((st) => st.key === r.config.strategy);
               return (
                 <th key={r.config.strategy} className="text-center py-2 px-3 font-semibold text-white">
                   {s?.emoji} {s?.label}
@@ -139,7 +148,7 @@ function ComparisonTable({ results }: { results: BacktestResult[] }) {
                   const isBest = i === bestIdx;
                   return (
                     <td key={i} className={`py-2 px-3 text-center font-mono ${isBest ? "text-[var(--color-positive)] font-bold" : "text-white/70"}`}>
-                      {m.format(val)} {isBest && "\u{1F3C6}"}
+                      {m.format(val)} {isBest && "🏆"}
                     </td>
                   );
                 })}
@@ -160,61 +169,42 @@ export default function StrategyComparison() {
   const [progress, setProgress] = useState<Record<BotStrategy, number>>({ conservative: 0, balanced: 0, aggressive: 0 });
   const [results, setResults] = useState<BacktestResult[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const workersRef = useRef<Worker[]>([]);
+  const abortRef = useRef(false);
 
   const launch = useCallback(async () => {
     setRunning(true);
     setResults([]);
     setError(null);
     setProgress({ conservative: 0, balanced: 0, aggressive: 0 });
+    abortRef.current = false;
 
-    // Terminate previous workers
-    workersRef.current.forEach((w) => w.terminate());
-    workersRef.current = [];
+    const timeoutId = setTimeout(() => {
+      abortRef.current = true;
+      setError("Backtest échoué — réessayez (timeout 30s)");
+      setRunning(false);
+    }, TIMEOUT_MS);
 
     try {
       const res = await fetch(`/api/market/ohlcv?crypto=${crypto}&days=${days}`);
-      if (!res.ok) throw new Error("Erreur lors du chargement des donn\u00e9es");
+      if (!res.ok) throw new Error("Erreur lors du chargement des données OHLCV");
       const ohlcv = await res.json();
-      if (!ohlcv.data || ohlcv.data.length < 10) throw new Error("Donn\u00e9es insuffisantes");
+      if (!ohlcv.data || !Array.isArray(ohlcv.data) || ohlcv.data.length < 10) {
+        throw new Error("Données insuffisantes pour le backtest");
+      }
+
+      if (abortRef.current) return;
 
       const completed: BacktestResult[] = [];
-      let doneCount = 0;
 
+      // Run 3 backtests sequentially to avoid blocking the UI
       for (const strat of STRATEGY_LIST) {
+        if (abortRef.current) return;
+
         const stratConfig = STRATEGIES[strat.key];
-        const worker = new Worker("/workers/backtest-worker.js");
-        workersRef.current.push(worker);
 
-        worker.onmessage = (e: MessageEvent) => {
-          const msg = e.data;
-          if (msg.type === "progress") {
-            setProgress((prev) => ({ ...prev, [strat.key]: msg.progress }));
-          } else if (msg.type === "complete") {
-            completed.push({
-              config: { crypto, days, strategy: strat.key, initialCapital: capital, allocations: { BTCUSDT: 50, ETHUSDT: 30, SOLUSDT: 20 } },
-              stats: msg.result.stats,
-              trades: msg.result.trades,
-              curve: msg.result.curve,
-            });
-            doneCount++;
-            if (doneCount === 3) {
-              // Sort by strategy order
-              const ordered = STRATEGY_LIST.map((s) => completed.find((r) => r.config.strategy === s.key)!).filter(Boolean);
-              setResults(ordered);
-              setRunning(false);
-            }
-            worker.terminate();
-          } else if (msg.type === "error") {
-            setError(msg.error);
-            setRunning(false);
-          }
-        };
-
-        worker.postMessage({
-          type: "run",
-          ohlcData: ohlcv.data,
-          config: {
+        const engineResult = await runBacktestAsync(
+          ohlcv.data,
+          {
             strategy: strat.key,
             initialCapital: capital,
             stopLossPct: stratConfig.stopLossPct,
@@ -224,12 +214,34 @@ export default function StrategyComparison() {
             trailingStop: true,
             maxDrawdownPct: 15,
             cooldownBars: 3,
+            cryptoLabel: CRYPTO_LABELS[crypto] || "BTC",
           },
+          (pct) => {
+            if (!abortRef.current) {
+              setProgress((prev) => ({ ...prev, [strat.key]: pct }));
+            }
+          }
+        );
+
+        if (abortRef.current) return;
+
+        completed.push({
+          config: { crypto, days, strategy: strat.key, initialCapital: capital, allocations: { BTCUSDT: 50, ETHUSDT: 30, SOLUSDT: 20 } },
+          stats: engineResult.stats,
+          trades: engineResult.trades,
+          curve: engineResult.curve,
         });
       }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Erreur inconnue");
+
+      clearTimeout(timeoutId);
+      setResults(completed);
       setRunning(false);
+    } catch (err) {
+      clearTimeout(timeoutId);
+      if (!abortRef.current) {
+        setError(err instanceof Error ? err.message : "Erreur inconnue");
+        setRunning(false);
+      }
     }
   }, [crypto, days, capital]);
 
@@ -242,10 +254,10 @@ export default function StrategyComparison() {
 
   const recommendation = winner
     ? winner.stats.totalReturn > 5
-      ? `La strat\u00e9gie ${winnerInfo?.label} offre le meilleur rendement avec un Sharpe de ${winner.stats.sharpeRatio.toFixed(2)}. Recommand\u00e9e pour cette p\u00e9riode.`
+      ? `La stratégie ${winnerInfo?.label} offre le meilleur rendement avec un Sharpe de ${winner.stats.sharpeRatio.toFixed(2)}. Recommandée pour cette période.`
       : winner.stats.totalReturn > 0
-        ? `Rendements modestes. La strat\u00e9gie ${winnerInfo?.label} performe l\u00e9g\u00e8rement mieux, mais les conditions de march\u00e9 limitent les gains.`
-        : `March\u00e9 d\u00e9favorable. Aucune strat\u00e9gie ne g\u00e9n\u00e8re de profit. Consid\u00e9rez de rester en dehors du march\u00e9.`
+        ? `Rendements modestes. La stratégie ${winnerInfo?.label} performe légèrement mieux, mais les conditions de marché limitent les gains.`
+        : `Marché défavorable. Aucune stratégie ne génère de profit. Considérez de rester en dehors du marché.`
     : "";
 
   return (
@@ -256,7 +268,7 @@ export default function StrategyComparison() {
 
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div>
-            <label className="block text-[10px] uppercase tracking-wider text-[var(--color-text-muted)] mb-1.5">P\u00e9riode</label>
+            <label className="block text-[10px] uppercase tracking-wider text-[var(--color-text-muted)] mb-1.5">Période</label>
             <div className="flex gap-1.5">
               {PERIODS.map((p) => (
                 <button key={p.value} onClick={() => setDays(p.value)} disabled={running}
@@ -313,7 +325,7 @@ export default function StrategyComparison() {
         <button onClick={launch} disabled={running}
           className="w-full rounded-xl bg-gradient-to-r from-purple-500 to-pink-500 px-6 py-3 text-sm font-bold text-white shadow-lg shadow-purple-500/25 transition-all hover:shadow-xl hover:scale-[1.01] active:scale-[0.99] disabled:opacity-50 disabled:hover:scale-100"
         >
-          {running ? "Comparaison en cours..." : "Comparer les 3 Strat\u00e9gies"}
+          {running ? "Comparaison en cours..." : "Comparer les 3 Stratégies"}
         </button>
       </div>
 
@@ -336,7 +348,7 @@ export default function StrategyComparison() {
 
           {/* Overlaid curves */}
           <div className="rounded-2xl border border-[var(--color-border-subtle)] bg-[var(--color-bg-card)] p-5">
-            <h3 className="text-sm font-semibold text-white mb-3">Courbes Compar\u00e9es</h3>
+            <h3 className="text-sm font-semibold text-white mb-3">Courbes Comparées</h3>
             <OverlaidChart results={results} />
           </div>
 

@@ -3,9 +3,11 @@
 import { useState, useRef, useCallback } from "react";
 import type { BotStrategy } from "@/lib/bot/types";
 import { STRATEGIES } from "@/lib/bot/types";
+import { runBacktestAsync } from "@/lib/backtest-engine";
+import type { BacktestEngineResult } from "@/lib/backtest-engine";
 
 // ============================================
-// Backtest Panel — Config form + Web Worker launcher
+// Backtest Panel — Config form + inline backtest engine
 // ============================================
 
 export interface BacktestConfig {
@@ -63,6 +65,12 @@ const PERIODS: { label: string; value: 30 | 90 | 180 | 365 }[] = [
   { label: "1 an", value: 365 },
 ];
 
+const CRYPTO_LABELS: Record<string, string> = {
+  bitcoin: "BTC",
+  ethereum: "ETH",
+  solana: "SOL",
+};
+
 const CRYPTOS: { id: "bitcoin" | "ethereum" | "solana"; label: string; symbol: string }[] = [
   { id: "bitcoin", label: "BTC", symbol: "BTCUSDT" },
   { id: "ethereum", label: "ETH", symbol: "ETHUSDT" },
@@ -70,10 +78,12 @@ const CRYPTOS: { id: "bitcoin" | "ethereum" | "solana"; label: string; symbol: s
 ];
 
 const STRATEGY_LIST: { key: BotStrategy; emoji: string; label: string; desc: string }[] = [
-  { key: "conservative", emoji: "\u{1F6E1}\uFE0F", label: "Conservateur", desc: "SL 1.5% / TP 2.5%" },
-  { key: "balanced", emoji: "\u2696\uFE0F", label: "Equilibr\u00e9", desc: "SL 2.5% / TP 4%" },
-  { key: "aggressive", emoji: "\u{1F525}", label: "Agressif", desc: "SL 4% / TP 6%" },
+  { key: "conservative", emoji: "🛡️", label: "Conservateur", desc: "SL 1.5% / TP 2.5%" },
+  { key: "balanced", emoji: "⚖️", label: "Équilibré", desc: "SL 2.5% / TP 4%" },
+  { key: "aggressive", emoji: "🔥", label: "Agressif", desc: "SL 4% / TP 6%" },
 ];
+
+const TIMEOUT_MS = 30_000;
 
 interface Props {
   onResult: (result: BacktestResult) => void;
@@ -88,69 +98,43 @@ export default function BacktestPanel({ onResult, onRunning }: Props) {
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const workerRef = useRef<Worker | null>(null);
+  const abortRef = useRef(false);
 
   const launch = useCallback(async () => {
     setRunning(true);
     setProgress(0);
     setError(null);
     onRunning(true);
+    abortRef.current = false;
+
+    // 30s timeout
+    const timeoutId = setTimeout(() => {
+      abortRef.current = true;
+      setError("Backtest échoué — réessayez (timeout 30s)");
+      setRunning(false);
+      onRunning(false);
+    }, TIMEOUT_MS);
 
     try {
       // Fetch OHLCV data
       const res = await fetch(`/api/market/ohlcv?crypto=${crypto}&days=${days}`);
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || "Erreur lors du chargement des donn\u00e9es");
+        throw new Error(data.error || "Erreur lors du chargement des données OHLCV");
       }
       const ohlcv = await res.json();
 
-      if (!ohlcv.data || ohlcv.data.length < 10) {
-        throw new Error("Donn\u00e9es insuffisantes pour le backtest");
+      if (!ohlcv.data || !Array.isArray(ohlcv.data) || ohlcv.data.length < 10) {
+        throw new Error("Données insuffisantes pour le backtest — essayez une période plus longue");
       }
 
-      // Terminate any previous worker
-      workerRef.current?.terminate();
-
-      const worker = new Worker("/workers/backtest-worker.js");
-      workerRef.current = worker;
+      if (abortRef.current) return;
 
       const strat = STRATEGIES[strategy];
 
-      worker.onmessage = (e: MessageEvent) => {
-        const msg = e.data;
-        if (msg.type === "progress") {
-          setProgress(msg.progress);
-        } else if (msg.type === "complete") {
-          const result: BacktestResult = {
-            config: { crypto, days, strategy, initialCapital: capital, allocations: { BTCUSDT: 50, ETHUSDT: 30, SOLUSDT: 20 } },
-            stats: msg.result.stats,
-            trades: msg.result.trades,
-            curve: msg.result.curve,
-          };
-          onResult(result);
-          setRunning(false);
-          setProgress(100);
-          onRunning(false);
-          worker.terminate();
-        } else if (msg.type === "error") {
-          setError(msg.error);
-          setRunning(false);
-          onRunning(false);
-          worker.terminate();
-        }
-      };
-
-      worker.onerror = () => {
-        setError("Erreur du worker de backtest");
-        setRunning(false);
-        onRunning(false);
-      };
-
-      worker.postMessage({
-        type: "run",
-        ohlcData: ohlcv.data,
-        config: {
+      const engineResult: BacktestEngineResult = await runBacktestAsync(
+        ohlcv.data,
+        {
           strategy,
           initialCapital: capital,
           stopLossPct: strat.stopLossPct,
@@ -160,12 +144,35 @@ export default function BacktestPanel({ onResult, onRunning }: Props) {
           trailingStop: true,
           maxDrawdownPct: 15,
           cooldownBars: 3,
+          cryptoLabel: CRYPTO_LABELS[crypto] || "BTC",
         },
-      });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Erreur inconnue");
+        (pct) => {
+          if (!abortRef.current) setProgress(pct);
+        }
+      );
+
+      if (abortRef.current) return;
+
+      clearTimeout(timeoutId);
+
+      const result: BacktestResult = {
+        config: { crypto, days, strategy, initialCapital: capital, allocations: { BTCUSDT: 50, ETHUSDT: 30, SOLUSDT: 20 } },
+        stats: engineResult.stats,
+        trades: engineResult.trades,
+        curve: engineResult.curve,
+      };
+
+      onResult(result);
+      setProgress(100);
       setRunning(false);
       onRunning(false);
+    } catch (err) {
+      clearTimeout(timeoutId);
+      if (!abortRef.current) {
+        setError(err instanceof Error ? err.message : "Erreur inconnue");
+        setRunning(false);
+        onRunning(false);
+      }
     }
   }, [crypto, days, strategy, capital, onResult, onRunning]);
 
@@ -174,7 +181,7 @@ export default function BacktestPanel({ onResult, onRunning }: Props) {
       {/* Period selector */}
       <div>
         <label className="block text-xs uppercase tracking-wider text-[var(--color-text-muted)] mb-2">
-          P\u00e9riode
+          Période
         </label>
         <div className="flex gap-2">
           {PERIODS.map((p) => (
@@ -220,7 +227,7 @@ export default function BacktestPanel({ onResult, onRunning }: Props) {
       {/* Strategy cards */}
       <div>
         <label className="block text-xs uppercase tracking-wider text-[var(--color-text-muted)] mb-2">
-          Strat\u00e9gie
+          Stratégie
         </label>
         <div className="grid grid-cols-3 gap-2">
           {STRATEGY_LIST.map((s) => (

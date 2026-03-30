@@ -95,7 +95,7 @@ function StatsGrid({ stats }: { stats: BacktestResult["stats"] }) {
   const items = [
     { label: "Trades", value: stats.totalTrades.toString(), color: "text-white" },
     { label: "Win Rate", value: `${stats.winRate.toFixed(1)}%`, color: stats.winRate >= 55 ? "text-[var(--color-positive)]" : stats.winRate >= 45 ? "text-yellow-400" : "text-[var(--color-negative)]" },
-    { label: "Profit Factor", value: stats.profitFactor === Infinity ? "\u221E" : stats.profitFactor.toFixed(2), color: stats.profitFactor >= 1.5 ? "text-[var(--color-positive)]" : "text-[var(--color-negative)]" },
+    { label: "Profit Factor", value: stats.profitFactor === Infinity ? "∞" : stats.profitFactor.toFixed(2), color: stats.profitFactor >= 1.5 ? "text-[var(--color-positive)]" : "text-[var(--color-negative)]" },
     { label: "Sharpe Ratio", value: stats.sharpeRatio.toFixed(2), color: stats.sharpeRatio >= 1 ? "text-[var(--color-positive)]" : "text-yellow-400" },
     { label: "Max Drawdown", value: `${stats.maxDrawdown.toFixed(2)}%`, color: "text-[var(--color-negative)]" },
     { label: "Gain Moyen", value: `${stats.avgWin.toFixed(2)}%`, color: "text-[var(--color-positive)]" },
@@ -104,7 +104,7 @@ function StatsGrid({ stats }: { stats: BacktestResult["stats"] }) {
     { label: "Pire Trade", value: `${stats.worstTrade.toFixed(2)}%`, color: "text-[var(--color-negative)]" },
     { label: "Win Streak", value: stats.winStreak.toString(), color: "text-[var(--color-positive)]" },
     { label: "Lose Streak", value: stats.loseStreak.toString(), color: "text-[var(--color-negative)]" },
-    { label: "Esp\u00e9rance", value: `$${stats.expectedValue.toFixed(2)}`, color: stats.expectedValue >= 0 ? "text-[var(--color-positive)]" : "text-[var(--color-negative)]" },
+    { label: "Espérance", value: `$${stats.expectedValue.toFixed(2)}`, color: stats.expectedValue >= 0 ? "text-[var(--color-positive)]" : "text-[var(--color-negative)]" },
   ];
 
   return (
@@ -128,12 +128,12 @@ function TradeDistribution({ trades }: { trades: BacktestResult["trades"] }) {
     if (trades.length === 0) return [];
     const ranges = [
       { label: "< -4%", min: -Infinity, max: -4 },
-      { label: "-4 \u00e0 -2%", min: -4, max: -2 },
-      { label: "-2 \u00e0 -1%", min: -2, max: -1 },
-      { label: "-1 \u00e0 0%", min: -1, max: 0 },
-      { label: "0 \u00e0 1%", min: 0, max: 1 },
-      { label: "1 \u00e0 2%", min: 1, max: 2 },
-      { label: "2 \u00e0 4%", min: 2, max: 4 },
+      { label: "-4 à -2%", min: -4, max: -2 },
+      { label: "-2 à -1%", min: -2, max: -1 },
+      { label: "-1 à 0%", min: -1, max: 0 },
+      { label: "0 à 1%", min: 0, max: 1 },
+      { label: "1 à 2%", min: 1, max: 2 },
+      { label: "2 à 4%", min: 2, max: 4 },
       { label: "> 4%", min: 4, max: Infinity },
     ];
     return ranges.map((r) => ({
@@ -254,7 +254,7 @@ export default function BacktestResults({ result }: Props) {
 
       {/* Stats grid */}
       <div className="rounded-2xl border border-[var(--color-border-subtle)] bg-[var(--color-bg-card)] p-5">
-        <h3 className="text-sm font-semibold text-white mb-3">Statistiques D\u00e9taill\u00e9es</h3>
+        <h3 className="text-sm font-semibold text-white mb-3">Statistiques Détaillées</h3>
         <StatsGrid stats={stats} />
       </div>
 
