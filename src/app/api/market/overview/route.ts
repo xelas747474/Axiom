@@ -32,8 +32,25 @@ interface FngEntry {
 
 const REDIS_CACHE_KEY = "axiom:cache:market-overview";
 const REDIS_CACHE_TTL = 45; // seconds
+const CG_URL_CACHE_TTL = 60; // 60s per-URL Redis cache
+const DELAY_BETWEEN_CG = 1500; // 1.5s between CoinGecko calls
+const RETRY_DELAY = 2000;
 
-async function fetchFresh<T>(url: string, timeoutMs = 6000): Promise<T | null> {
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function urlCacheKey(url: string): string {
+  let hash = 0;
+  for (let i = 0; i < url.length; i++) {
+    const ch = url.charCodeAt(i);
+    hash = ((hash << 5) - hash) + ch;
+    hash |= 0;
+  }
+  return `axiom:cache:ov:${Math.abs(hash).toString(36)}`;
+}
+
+async function fetchOnce<T>(url: string, timeoutMs = 6000): Promise<T | null> {
   try {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
@@ -48,6 +65,36 @@ async function fetchFresh<T>(url: string, timeoutMs = 6000): Promise<T | null> {
   } catch {
     return null;
   }
+}
+
+// Fetch with Redis cache + retry once after 2s
+async function fetchFresh<T>(url: string): Promise<T | null> {
+  const redis = getRedis();
+  const key = urlCacheKey(url);
+
+  // Check Redis cache first
+  try {
+    const cached = await redis.get<T>(key);
+    if (cached !== null && cached !== undefined) return cached;
+  } catch { /* continue */ }
+
+  // First attempt
+  let result = await fetchOnce<T>(url);
+
+  // Retry once after 2s if failed
+  if (result === null) {
+    await sleep(RETRY_DELAY);
+    result = await fetchOnce<T>(url);
+  }
+
+  // Cache on success
+  if (result !== null) {
+    try {
+      await redis.set(key, JSON.stringify(result), { ex: CG_URL_CACHE_TTL });
+    } catch { /* non-critical */ }
+  }
+
+  return result;
 }
 
 const HEATMAP_IDS = "bitcoin,ethereum,solana,binancecoin,ripple,cardano,avalanche-2,chainlink,polkadot,matic-network";
@@ -65,7 +112,7 @@ export async function GET() {
     // Redis unavailable, continue to fetch
   }
 
-  // Fetch base market data
+  // Fetch base market data (already sequential internally)
   let market: MarketDataResult;
   try {
     market = await fetchMarketData();
@@ -73,15 +120,16 @@ export async function GET() {
     market = FALLBACK_MARKET_DATA;
   }
 
-  // Fetch heatmap coins + F&G history in parallel
-  const [coinsDetailed, fngHistory] = await Promise.all([
-    fetchFresh<CoinMarketData[]>(
-      `${COINGECKO_BASE}/coins/markets?vs_currency=usd&ids=${HEATMAP_IDS}&order=market_cap_desc&sparkline=true&price_change_percentage=1h,24h,7d`
-    ),
-    fetchFresh<{ data: FngEntry[] }>(
-      "https://api.alternative.me/fng/?limit=30"
-    ),
-  ]);
+  // Fetch F&G history first (alternative.me, NOT CoinGecko — no delay needed)
+  const fngHistory = await fetchFresh<{ data: FngEntry[] }>(
+    "https://api.alternative.me/fng/?limit=30"
+  );
+
+  // Then CoinGecko heatmap call (with delay after market data calls)
+  await sleep(DELAY_BETWEEN_CG);
+  const coinsDetailed = await fetchFresh<CoinMarketData[]>(
+    `${COINGECKO_BASE}/coins/markets?vs_currency=usd&ids=${HEATMAP_IDS}&order=market_cap_desc&sparkline=true&price_change_percentage=1h,24h,7d`
+  );
 
   // Process heatmap coins — use live data or try Redis fallback
   let heatmapCoins;
@@ -123,9 +171,18 @@ export async function GET() {
   const mainCryptos = ["bitcoin", "ethereum", "solana"];
   const aiScores = mainCryptos.map((id) => {
     const coin = heatmapCoins!.find((c: { id: string }) => c.id === id);
-    if (!coin) {
-      const sym = id === "bitcoin" ? "BTC" : id === "ethereum" ? "ETH" : "SOL";
-      return { id, symbol: sym, name: sym, price: 0, change24h: 0, change7d: 0, sparkline7d: [] as number[], score: 0, categories: getDefaultCategories(), entryPrice: 0, stopLoss: 0, takeProfit: 0 };
+    const sym = id === "bitcoin" ? "BTC" : id === "ethereum" ? "ETH" : "SOL";
+    const fullName = id === "bitcoin" ? "Bitcoin" : id === "ethereum" ? "Ethereum" : "Solana";
+
+    // If no coin data or price is 0, mark as unavailable
+    if (!coin || coin.price <= 0) {
+      return {
+        id, symbol: sym, name: fullName, price: 0, change24h: 0, change7d: 0,
+        sparkline7d: [] as number[], score: 0,
+        categories: getUnavailableCategories(),
+        entryPrice: 0, stopLoss: 0, takeProfit: 0,
+        unavailable: true,
+      };
     }
 
     const trend = computeTrendScore(coin);
@@ -152,6 +209,7 @@ export async function GET() {
       entryPrice: coin.price,
       stopLoss: Math.round(coin.price * 0.97 * 100) / 100,
       takeProfit: Math.round(coin.price * 1.05 * 100) / 100,
+      unavailable: false,
     };
   });
 
@@ -226,6 +284,16 @@ function getDefaultCategories(): CategoryResult[] {
     { category: "Volume", score: 0, details: "Données insuffisantes" },
     { category: "Volatilité", score: 0, details: "Données insuffisantes" },
     { category: "Sentiment", score: 0, details: "Données insuffisantes" },
+  ];
+}
+
+function getUnavailableCategories(): CategoryResult[] {
+  return [
+    { category: "Tendance", score: 0, details: "Données temporairement indisponibles" },
+    { category: "Momentum", score: 0, details: "Données temporairement indisponibles" },
+    { category: "Volume", score: 0, details: "Données temporairement indisponibles" },
+    { category: "Volatilité", score: 0, details: "Données temporairement indisponibles" },
+    { category: "Sentiment", score: 0, details: "Données temporairement indisponibles" },
   ];
 }
 

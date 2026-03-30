@@ -1,18 +1,23 @@
 // ============================================
-// CoinGecko API Client — with fast timeout, retry, and full fallbacks
+// CoinGecko API Client — with sequential fetching, Redis cache, retry
 // Free API — no key required (rate limited at ~30 req/min)
+// Sequential calls with 1.5s delay to avoid rate-limiting
 // ============================================
 
+import { getRedis } from "@/lib/redis";
+
 const BASE_URL = "https://api.coingecko.com/api/v3";
-const FETCH_TIMEOUT = 6000; // 6s timeout — a bit more room for slow API
+const FETCH_TIMEOUT = 6000;
+const DELAY_BETWEEN_CALLS = 1500; // 1.5s between CoinGecko calls
+const REDIS_PER_URL_TTL = 60; // 60s per-URL cache
+const RETRY_DELAY = 2000; // 2s before retry
 
 // ============================================
 // Server-side in-memory cache — prevents flickering between live & fallback
-// When CoinGecko rate-limits, we return the LAST known live data
 // ============================================
 let cachedResult: MarketDataResult | null = null;
 let cacheTimestamp = 0;
-const CACHE_TTL = 25_000; // 25s — slightly under the 30s ISR revalidate
+const CACHE_TTL = 25_000;
 
 interface CoinGeckoMarketCoin {
   id: string;
@@ -94,11 +99,60 @@ export const FALLBACK_MARKET_DATA: MarketDataResult = {
   isLive: false,
 };
 
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// Generate a short Redis key from a URL
+function urlCacheKey(url: string): string {
+  // Hash the URL into a short key
+  let hash = 0;
+  for (let i = 0; i < url.length; i++) {
+    const ch = url.charCodeAt(i);
+    hash = ((hash << 5) - hash) + ch;
+    hash |= 0;
+  }
+  return `axiom:cache:cg:${Math.abs(hash).toString(36)}`;
+}
+
 // ============================================
-// Fetch with timeout — single attempt, fail fast
-// Next.js revalidate handles caching at the route level
+// Fetch with Redis cache per URL + retry once after 2s
 // ============================================
 async function fetchSafe<T>(url: string): Promise<T | null> {
+  // 1. Check Redis cache first
+  try {
+    const redis = getRedis();
+    const cached = await redis.get<T>(urlCacheKey(url));
+    if (cached !== null && cached !== undefined) {
+      return cached;
+    }
+  } catch {
+    // Redis unavailable, continue to fetch
+  }
+
+  // 2. First attempt
+  let result = await fetchOnce<T>(url);
+
+  // 3. Retry once after 2s if failed
+  if (result === null) {
+    await sleep(RETRY_DELAY);
+    result = await fetchOnce<T>(url);
+  }
+
+  // 4. Cache successful result in Redis
+  if (result !== null) {
+    try {
+      const redis = getRedis();
+      await redis.set(urlCacheKey(url), JSON.stringify(result), { ex: REDIS_PER_URL_TTL });
+    } catch {
+      // Non-critical
+    }
+  }
+
+  return result;
+}
+
+async function fetchOnce<T>(url: string): Promise<T | null> {
   try {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT);
@@ -119,8 +173,8 @@ async function fetchSafe<T>(url: string): Promise<T | null> {
 }
 
 // ============================================
-// Main fetch — gracefully degrades on any failure
-// Total worst case: ~4s (single timeout, all parallel)
+// Main fetch — SEQUENTIAL CoinGecko calls with 1.5s delay
+// Avoids rate-limiting from burst parallel requests
 // ============================================
 export async function fetchMarketData(): Promise<MarketDataResult> {
   // Return cached data if still fresh
@@ -128,28 +182,39 @@ export async function fetchMarketData(): Promise<MarketDataResult> {
     return cachedResult;
   }
 
-  const [coins, globalData, fearGreedData, btcChart1d, btcChart7d, btcChart30d, btcChart365d] =
-    await Promise.all([
-      fetchSafe<CoinGeckoMarketCoin[]>(
-        `${BASE_URL}/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=50&page=1&sparkline=false&price_change_percentage=24h`
-      ),
-      fetchSafe<CoinGeckoGlobal>(`${BASE_URL}/global`),
-      fetchSafe<CoinGeckoFearGreed>(
-        "https://api.alternative.me/fng/?limit=1"
-      ),
-      fetchSafe<{ prices: [number, number][] }>(
-        `${BASE_URL}/coins/bitcoin/market_chart?vs_currency=usd&days=1`
-      ),
-      fetchSafe<{ prices: [number, number][] }>(
-        `${BASE_URL}/coins/bitcoin/market_chart?vs_currency=usd&days=7`
-      ),
-      fetchSafe<{ prices: [number, number][] }>(
-        `${BASE_URL}/coins/bitcoin/market_chart?vs_currency=usd&days=30`
-      ),
-      fetchSafe<{ prices: [number, number][] }>(
-        `${BASE_URL}/coins/bitcoin/market_chart?vs_currency=usd&days=365`
-      ),
-    ]);
+  // Sequential fetching with delay between each CoinGecko call
+  // Fear & Greed (alternative.me) is NOT CoinGecko, so it can go first without delay
+  const fearGreedData = await fetchSafe<CoinGeckoFearGreed>(
+    "https://api.alternative.me/fng/?limit=1"
+  );
+
+  // CoinGecko calls — sequential with 1.5s delay between each
+  const coins = await fetchSafe<CoinGeckoMarketCoin[]>(
+    `${BASE_URL}/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=50&page=1&sparkline=false&price_change_percentage=24h`
+  );
+
+  await sleep(DELAY_BETWEEN_CALLS);
+  const globalData = await fetchSafe<CoinGeckoGlobal>(`${BASE_URL}/global`);
+
+  await sleep(DELAY_BETWEEN_CALLS);
+  const btcChart1d = await fetchSafe<{ prices: [number, number][] }>(
+    `${BASE_URL}/coins/bitcoin/market_chart?vs_currency=usd&days=1`
+  );
+
+  await sleep(DELAY_BETWEEN_CALLS);
+  const btcChart7d = await fetchSafe<{ prices: [number, number][] }>(
+    `${BASE_URL}/coins/bitcoin/market_chart?vs_currency=usd&days=7`
+  );
+
+  await sleep(DELAY_BETWEEN_CALLS);
+  const btcChart30d = await fetchSafe<{ prices: [number, number][] }>(
+    `${BASE_URL}/coins/bitcoin/market_chart?vs_currency=usd&days=30`
+  );
+
+  await sleep(DELAY_BETWEEN_CALLS);
+  const btcChart365d = await fetchSafe<{ prices: [number, number][] }>(
+    `${BASE_URL}/coins/bitcoin/market_chart?vs_currency=usd&days=365`
+  );
 
   // If the critical request (coins) failed, return cached or fallback
   if (!coins) {
@@ -204,11 +269,10 @@ export async function fetchMarketData(): Promise<MarketDataResult> {
 
   const fallbackChart = FALLBACK_MARKET_DATA.chartData;
 
-  // 1H: last ~12 points from 1-day data (each ~5min granularity from CoinGecko)
+  // 1H: last ~12 points from 1-day data
   let hourData = fallbackChart["1H"];
   if (btcChart1d?.prices?.length) {
     const prices = btcChart1d.prices.map((p) => p[1]);
-    // Take the last ~12 data points for "1 hour" view
     const lastN = Math.min(12, prices.length);
     hourData = prices.slice(-lastN).map(Math.round);
   }
@@ -249,7 +313,7 @@ export async function fetchMarketData(): Promise<MarketDataResult> {
     isLive: true,
   };
 
-  // Cache successful live data — so rate-limit failures still show last known data
+  // Cache successful live data
   cachedResult = result;
   cacheTimestamp = Date.now();
 
