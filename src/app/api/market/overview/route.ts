@@ -1,28 +1,15 @@
 // ============================================
 // GET /api/market/overview
 // Centralized market data for AI Insights page
-// Uses Redis cache for resilience on Vercel serverless
+// Primary: Binance for prices | CoinGecko for sparklines/FGI
 // ============================================
 
 import { fetchMarketData, FALLBACK_MARKET_DATA, type MarketDataResult } from "@/lib/coingecko";
+import { getCurrentPrices } from "@/lib/market-data";
+import { COINGECKO_IDS, type TickerData } from "@/lib/binance";
 import { getRedis } from "@/lib/redis";
 
 export const dynamic = "force-dynamic";
-
-const COINGECKO_BASE = "https://api.coingecko.com/api/v3";
-
-interface CoinMarketData {
-  id: string;
-  symbol: string;
-  name: string;
-  current_price: number;
-  price_change_percentage_24h: number;
-  price_change_percentage_1h_in_currency: number | null;
-  price_change_percentage_7d_in_currency: number | null;
-  market_cap: number;
-  total_volume: number;
-  sparkline_in_7d?: { price: number[] };
-}
 
 interface FngEntry {
   value: string;
@@ -31,26 +18,13 @@ interface FngEntry {
 }
 
 const REDIS_CACHE_KEY = "axiom:cache:market-overview";
-const REDIS_CACHE_TTL = 45; // seconds
-const CG_URL_CACHE_TTL = 60; // 60s per-URL Redis cache
-const DELAY_BETWEEN_CG = 1500; // 1.5s between CoinGecko calls
-const RETRY_DELAY = 2000;
+const REDIS_CACHE_TTL = 45;
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-function urlCacheKey(url: string): string {
-  let hash = 0;
-  for (let i = 0; i < url.length; i++) {
-    const ch = url.charCodeAt(i);
-    hash = ((hash << 5) - hash) + ch;
-    hash |= 0;
-  }
-  return `axiom:cache:ov:${Math.abs(hash).toString(36)}`;
-}
-
-async function fetchOnce<T>(url: string, timeoutMs = 6000): Promise<T | null> {
+async function fetchFresh<T>(url: string, timeoutMs = 6000): Promise<T | null> {
   try {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
@@ -67,97 +41,102 @@ async function fetchOnce<T>(url: string, timeoutMs = 6000): Promise<T | null> {
   }
 }
 
-// Fetch with Redis cache + retry once after 2s
-async function fetchFresh<T>(url: string): Promise<T | null> {
-  const redis = getRedis();
-  const key = urlCacheKey(url);
+const COIN_NAMES: Record<string, string> = {
+  BTC: "Bitcoin", ETH: "Ethereum", SOL: "Solana", BNB: "BNB",
+  XRP: "XRP", ADA: "Cardano", AVAX: "Avalanche", LINK: "Chainlink",
+  DOT: "Polkadot", MATIC: "Polygon",
+};
 
-  // Check Redis cache first
-  try {
-    const cached = await redis.get<T>(key);
-    if (cached !== null && cached !== undefined) return cached;
-  } catch { /* continue */ }
-
-  // First attempt
-  let result = await fetchOnce<T>(url);
-
-  // Retry once after 2s if failed
-  if (result === null) {
-    await sleep(RETRY_DELAY);
-    result = await fetchOnce<T>(url);
-  }
-
-  // Cache on success
-  if (result !== null) {
-    try {
-      await redis.set(key, JSON.stringify(result), { ex: CG_URL_CACHE_TTL });
-    } catch { /* non-critical */ }
-  }
-
-  return result;
-}
-
-const HEATMAP_IDS = "bitcoin,ethereum,solana,binancecoin,ripple,cardano,avalanche-2,chainlink,polkadot,matic-network";
+// Rough market cap estimates in billions (for heatmap sizing)
+const APPROX_SUPPLY: Record<string, number> = {
+  BTC: 19_500_000, ETH: 120_000_000, SOL: 440_000_000, BNB: 150_000_000,
+  XRP: 55_000_000_000, ADA: 35_000_000_000, AVAX: 400_000_000,
+  LINK: 600_000_000, DOT: 1_400_000_000, MATIC: 10_000_000_000,
+};
 
 export async function GET() {
   const redis = getRedis();
 
-  // Try Redis cache first (survives cold starts)
+  // Try Redis cache first
   try {
     const cached = await redis.get<{ data: unknown; ts: number }>(REDIS_CACHE_KEY);
     if (cached && cached.data && Date.now() - cached.ts < REDIS_CACHE_TTL * 1000) {
       return Response.json(cached.data);
     }
-  } catch {
-    // Redis unavailable, continue to fetch
-  }
+  } catch { /* continue */ }
 
-  // Fetch base market data (already sequential internally)
-  let market: MarketDataResult;
+  // Fetch Binance prices (fast, single call) + base market data in parallel
+  const [binancePrices, fngHistory, market] = await Promise.all([
+    getCurrentPrices(),
+    fetchFresh<{ data: FngEntry[] }>("https://api.alternative.me/fng/?limit=30"),
+    fetchMarketData().catch(() => FALLBACK_MARKET_DATA),
+  ]);
+
+  const hasBinance = Object.keys(binancePrices).length > 0;
+
+  // Try to get sparklines from CoinGecko (cached separately, low priority)
+  let sparklines: Record<string, number[]> = {};
   try {
-    market = await fetchMarketData();
-  } catch {
-    market = FALLBACK_MARKET_DATA;
+    const cached = await redis.get<Record<string, number[]>>("axiom:cache:sparklines");
+    if (cached) sparklines = cached;
+  } catch { /* fine without sparklines */ }
+
+  // If no sparklines cached, try a quick CoinGecko fetch
+  if (Object.keys(sparklines).length === 0 && !hasBinance) {
+    // Only if Binance also failed — try CoinGecko coins/markets
+    const ids = Object.values(COINGECKO_IDS).join(",");
+    const cgData = await fetchFresh<Array<{
+      id: string; symbol: string; name: string;
+      current_price: number; price_change_percentage_24h: number;
+      price_change_percentage_1h_in_currency: number | null;
+      price_change_percentage_7d_in_currency: number | null;
+      market_cap: number; total_volume: number;
+      sparkline_in_7d?: { price: number[] };
+    }>>(
+      `https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=${ids}&order=market_cap_desc&sparkline=true&price_change_percentage=1h,24h,7d`
+    );
+
+    if (cgData && cgData.length > 0) {
+      for (const c of cgData) {
+        const sym = Object.entries(COINGECKO_IDS).find(([, id]) => id === c.id)?.[0];
+        if (sym && c.sparkline_in_7d?.price) {
+          sparklines[sym] = c.sparkline_in_7d.price;
+        }
+      }
+      try {
+        await redis.set("axiom:cache:sparklines", JSON.stringify(sparklines), { ex: 300 });
+      } catch { /* non-critical */ }
+    }
   }
 
-  // Fetch F&G history first (alternative.me, NOT CoinGecko — no delay needed)
-  const fngHistory = await fetchFresh<{ data: FngEntry[] }>(
-    "https://api.alternative.me/fng/?limit=30"
-  );
-
-  // Then CoinGecko heatmap call (with delay after market data calls)
-  await sleep(DELAY_BETWEEN_CG);
-  const coinsDetailed = await fetchFresh<CoinMarketData[]>(
-    `${COINGECKO_BASE}/coins/markets?vs_currency=usd&ids=${HEATMAP_IDS}&order=market_cap_desc&sparkline=true&price_change_percentage=1h,24h,7d`
-  );
-
-  // Process heatmap coins — use live data or try Redis fallback
+  // Build heatmap coins from Binance data
   let heatmapCoins;
-  if (coinsDetailed && coinsDetailed.length > 0) {
-    heatmapCoins = coinsDetailed.map((c) => ({
-      id: c.id,
-      symbol: c.symbol.toUpperCase(),
-      name: c.name,
-      price: c.current_price,
-      change1h: Math.round((c.price_change_percentage_1h_in_currency ?? 0) * 100) / 100,
-      change24h: Math.round((c.price_change_percentage_24h ?? 0) * 100) / 100,
-      change7d: Math.round((c.price_change_percentage_7d_in_currency ?? 0) * 100) / 100,
-      marketCap: c.market_cap,
-      volume: c.total_volume,
-      sparkline7d: c.sparkline_in_7d?.price ?? [],
-    }));
+  if (hasBinance) {
+    heatmapCoins = Object.entries(binancePrices)
+      .filter(([sym]) => COIN_NAMES[sym])
+      .map(([sym, data]) => {
+        const supply = APPROX_SUPPLY[sym] ?? 1_000_000_000;
+        const sparkline = sparklines[sym] ?? [];
+        const change7d = sparkline.length > 20
+          ? ((sparkline[sparkline.length - 1] - sparkline[0]) / sparkline[0]) * 100
+          : 0;
+
+        return {
+          id: COINGECKO_IDS[sym] ?? sym.toLowerCase(),
+          symbol: sym,
+          name: COIN_NAMES[sym] ?? sym,
+          price: data.price,
+          change1h: 0, // Not available from Binance 24hr ticker
+          change24h: Math.round(data.change24h * 100) / 100,
+          change7d: Math.round(change7d * 100) / 100,
+          marketCap: Math.round(data.price * supply),
+          volume: data.volume24h,
+          sparkline7d: sparkline.length > 20 ? sampleArray(sparkline, 20) : sparkline,
+        };
+      });
   } else {
-    // Try to get last known heatmap from Redis
-    try {
-      const stale = await redis.get<{ data: { heatmapCoins: typeof heatmapCoins } }>(REDIS_CACHE_KEY);
-      heatmapCoins = stale?.data?.heatmapCoins;
-    } catch {
-      // ignore
-    }
-    if (!heatmapCoins) {
-      // Last resort: use market data prices for BTC/ETH/SOL
-      heatmapCoins = buildHeatmapFromMarket(market);
-    }
+    // Fallback: build from market data
+    heatmapCoins = buildHeatmapFromMarket(market);
   }
 
   // Fear & Greed history
@@ -170,11 +149,10 @@ export async function GET() {
   // Compute AI scores
   const mainCryptos = ["bitcoin", "ethereum", "solana"];
   const aiScores = mainCryptos.map((id) => {
-    const coin = heatmapCoins!.find((c: { id: string }) => c.id === id);
+    const coin = heatmapCoins.find((c: { id: string }) => c.id === id);
     const sym = id === "bitcoin" ? "BTC" : id === "ethereum" ? "ETH" : "SOL";
     const fullName = id === "bitcoin" ? "Bitcoin" : id === "ethereum" ? "Ethereum" : "Solana";
 
-    // If no coin data or price is 0, mark as unavailable
     if (!coin || coin.price <= 0) {
       return {
         id, symbol: sym, name: fullName, price: 0, change24h: 0, change7d: 0,
@@ -187,7 +165,7 @@ export async function GET() {
 
     const trend = computeTrendScore(coin);
     const momentum = computeMomentumScore(coin);
-    const volume = computeVolumeScore(coin, heatmapCoins!);
+    const volume = computeVolumeScore(coin, heatmapCoins);
     const volatility = computeVolatilityScore(coin);
     const sentiment = computeSentimentScore(coin, market.fearGreedIndex);
 
@@ -213,51 +191,37 @@ export async function GET() {
     };
   });
 
-  const isLive = coinsDetailed !== null && coinsDetailed.length > 0;
-
   const result = {
     ...market,
-    isLive,
+    isLive: hasBinance || market.isLive,
+    dataSource: hasBinance ? "binance" : "coingecko",
     heatmapCoins,
     fngHistory: fngHistoryData,
     aiScores,
     timestamp: Date.now(),
   };
 
-  // Save to Redis for next cold start
+  // Cache
   try {
     await redis.set(REDIS_CACHE_KEY, JSON.stringify({ data: result, ts: Date.now() }), { ex: REDIS_CACHE_TTL * 3 });
-  } catch {
-    // Non-critical
-  }
+  } catch { /* non-critical */ }
 
   return Response.json(result);
 }
 
-// Build minimal heatmap from market data when CoinGecko coins/markets fails
+// ---- Helpers (preserved from original) ----
+
 function buildHeatmapFromMarket(market: MarketDataResult) {
   const allCoins = [...market.topGainers, ...market.topLosers];
   const btc = { id: "bitcoin", symbol: "BTC", name: "Bitcoin", price: market.bitcoin.price, change1h: 0, change24h: market.bitcoin.change24h, change7d: 0, marketCap: market.bitcoin.price * 19e6, volume: 30e9, sparkline7d: [] as number[] };
   const eth = { id: "ethereum", symbol: "ETH", name: "Ethereum", price: market.ethereum.price, change1h: 0, change24h: market.ethereum.change24h, change7d: 0, marketCap: market.ethereum.price * 120e6, volume: 15e9, sparkline7d: [] as number[] };
   const sol = allCoins.find(c => c.symbol === "SOL");
   const solEntry = { id: "solana", symbol: "SOL", name: "Solana", price: sol?.price ?? 0, change1h: 0, change24h: sol?.change24h ?? 0, change7d: 0, marketCap: (sol?.price ?? 0) * 440e6, volume: 4e9, sparkline7d: [] as number[] };
-
-  const extras = allCoins
-    .filter(c => !["BTC", "ETH", "SOL"].includes(c.symbol))
-    .slice(0, 7)
-    .map(c => ({
-      id: c.name.toLowerCase().replace(/\s/g, "-"),
-      symbol: c.symbol,
-      name: c.name,
-      price: c.price,
-      change1h: 0,
-      change24h: c.change24h,
-      change7d: 0,
-      marketCap: c.price * 100e6,
-      volume: 1e9,
-      sparkline7d: [] as number[],
-    }));
-
+  const extras = allCoins.filter(c => !["BTC", "ETH", "SOL"].includes(c.symbol)).slice(0, 7).map(c => ({
+    id: c.name.toLowerCase().replace(/\s/g, "-"), symbol: c.symbol, name: c.name,
+    price: c.price, change1h: 0, change24h: c.change24h, change7d: 0,
+    marketCap: c.price * 100e6, volume: 1e9, sparkline7d: [] as number[],
+  }));
   return [btc, eth, solEntry, ...extras];
 }
 
@@ -265,27 +229,11 @@ function sampleArray(arr: number[], n: number): number[] {
   if (arr.length <= n) return arr;
   const step = (arr.length - 1) / (n - 1);
   const result: number[] = [];
-  for (let i = 0; i < n; i++) {
-    result.push(arr[Math.round(i * step)]);
-  }
+  for (let i = 0; i < n; i++) result.push(arr[Math.round(i * step)]);
   return result;
 }
 
-interface CategoryResult {
-  category: string;
-  score: number;
-  details: string;
-}
-
-function getDefaultCategories(): CategoryResult[] {
-  return [
-    { category: "Tendance", score: 0, details: "Données insuffisantes" },
-    { category: "Momentum", score: 0, details: "Données insuffisantes" },
-    { category: "Volume", score: 0, details: "Données insuffisantes" },
-    { category: "Volatilité", score: 0, details: "Données insuffisantes" },
-    { category: "Sentiment", score: 0, details: "Données insuffisantes" },
-  ];
-}
+interface CategoryResult { category: string; score: number; details: string; }
 
 function getUnavailableCategories(): CategoryResult[] {
   return [
@@ -316,7 +264,7 @@ function computeTrendScore(coin: { change1h: number; change24h: number; change7d
   return { category: "Tendance", score: clamped, details: clamped > 20 ? "Tendance haussière" : clamped < -20 ? "Tendance baissière" : "Tendance neutre" };
 }
 
-function computeMomentumScore(coin: { change1h: number; change24h: number; change7d: number; sparkline7d: number[] }): CategoryResult {
+function computeMomentumScore(coin: { change1h: number; change24h: number; sparkline7d: number[] }): CategoryResult {
   let score = 0;
   if (coin.sparkline7d.length > 14) {
     const changes: number[] = [];

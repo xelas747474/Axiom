@@ -117,7 +117,8 @@ export default function BacktestPanel({ onResult, onRunning }: Props) {
 
     try {
       // Fetch OHLCV data
-      const res = await fetch(`/api/market/ohlcv?crypto=${crypto}&days=${days}`);
+      const symbol = CRYPTO_LABELS[crypto] || "BTC";
+      const res = await fetch(`/api/market/ohlcv?symbol=${symbol}&days=${days}`);
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || "Erreur lors du chargement des données OHLCV");

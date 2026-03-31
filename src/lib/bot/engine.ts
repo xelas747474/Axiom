@@ -297,7 +297,7 @@ export function tickPositions(
         id: uid(),
         timestamp: Date.now(),
         type: "close",
-        message: `\u{1F6D1} CLOSE ${pos.direction} ${label} @ $${currentPrice.toFixed(2)} \u2014 P&L: ${trade.pnl >= 0 ? "+" : ""}$${trade.pnl.toFixed(2)} \u2014 ${pos.trailingStopPrice ? "Trailing stop" : "Stop loss"} touch\u00e9`,
+        message: `🛑 CLOSE ${pos.direction} ${label} @ $${currentPrice.toFixed(2)} — P&L: ${trade.pnl >= 0 ? "+" : ""}$${trade.pnl.toFixed(2)} — ${pos.trailingStopPrice ? "Trailing stop" : "Stop loss"} touché`,
       });
       continue;
     }
@@ -315,7 +315,7 @@ export function tickPositions(
         id: uid(),
         timestamp: Date.now(),
         type: "close",
-        message: `\u{1F4B0} CLOSE ${pos.direction} ${label} @ $${currentPrice.toFixed(2)} \u2014 P&L: +$${trade.pnl.toFixed(2)} \u2014 Take Profit atteint!`,
+        message: `💰 CLOSE ${pos.direction} ${label} @ $${currentPrice.toFixed(2)} — P&L: +$${trade.pnl.toFixed(2)} — Take Profit atteint!`,
       });
       continue;
     }
@@ -331,7 +331,7 @@ export function tickPositions(
         id: uid(),
         timestamp: Date.now(),
         type: "close",
-        message: `\u{1F504} CLOSE ${pos.direction} ${label} @ $${currentPrice.toFixed(2)} \u2014 P&L: ${trade.pnl >= 0 ? "+" : ""}$${trade.pnl.toFixed(2)} \u2014 Signal IA invers\u00e9`,
+        message: `🔄 CLOSE ${pos.direction} ${label} @ $${currentPrice.toFixed(2)} — P&L: ${trade.pnl >= 0 ? "+" : ""}$${trade.pnl.toFixed(2)} — Signal IA inversé`,
       });
       continue;
     }
@@ -348,7 +348,7 @@ export function tickPositions(
             id: uid(),
             timestamp: Date.now(),
             type: "update",
-            message: `\u{1F4CA} ${label} ${pos.direction} \u2014 Trailing stop ajust\u00e9: $${(pos.trailingStopPrice ?? 0).toFixed(2)} \u2192 $${newTS.toFixed(2)}`,
+            message: `📊 ${label} ${pos.direction} — Trailing stop ajusté: $${(pos.trailingStopPrice ?? 0).toFixed(2)} → $${newTS.toFixed(2)}`,
           });
         }
       } else if (pos.direction === "SHORT" && currentPrice < pos.entryPrice) {

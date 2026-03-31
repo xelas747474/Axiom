@@ -1,10 +1,11 @@
 // ============================================
 // Multi-Timeframe Analysis — 1D / 7D / 30D alignment
-// Uses CoinGecko OHLC data + RSI calculation
+// Primary: Binance OHLCV | Fallback: CoinGecko OHLC
 // Cached in Redis (5min TTL)
 // ============================================
 
 import { getRedis } from "@/lib/redis";
+import { getBinanceOHLCV, COINGECKO_TO_SYMBOL } from "@/lib/binance";
 
 const CACHE_KEY_PREFIX = "axiom:cache:mtf";
 const CACHE_TTL = 300;
@@ -12,9 +13,9 @@ const CACHE_TTL = 300;
 export interface TimeframeSignal {
   period: "1D" | "7D" | "30D";
   trend: "bullish" | "bearish" | "neutral";
-  strength: number;   // 0-100
+  strength: number;
   rsi: number | null;
-  priceChange: number; // % change over period
+  priceChange: number;
   detail: string;
 }
 
@@ -22,7 +23,7 @@ export interface MultiTimeframeData {
   coinId: string;
   timeframes: TimeframeSignal[];
   alignment: "aligned_bullish" | "aligned_bearish" | "mixed" | "neutral";
-  alignmentStrength: number; // 0-100
+  alignmentStrength: number;
   timestamp: number;
 }
 
@@ -60,17 +61,14 @@ function analyzeTrend(closes: number[]): { trend: "bullish" | "bearish" | "neutr
   const last = closes[closes.length - 1];
   const mid = closes[Math.floor(closes.length / 2)];
   const change = ((last - first) / first) * 100;
-
-  // Check consistency: is the trend steady or choppy?
-  let consistentMoves = 0;
   const isUp = last > first;
+
+  let consistentMoves = 0;
   for (let i = 1; i < closes.length; i++) {
-    const up = closes[i] > closes[i - 1];
-    if (up === isUp) consistentMoves++;
+    if ((closes[i] > closes[i - 1]) === isUp) consistentMoves++;
   }
   const consistency = consistentMoves / (closes.length - 1);
 
-  // SMA crossover check
   const shortLen = Math.min(5, Math.floor(closes.length / 3));
   const longLen = Math.min(20, closes.length);
   const shortSMA = closes.slice(-shortLen).reduce((a, b) => a + b, 0) / shortLen;
@@ -81,7 +79,6 @@ function analyzeTrend(closes: number[]): { trend: "bullish" | "bearish" | "neutr
   if (consistency > 0.6) strength = Math.min(100, strength * 1.3);
   if (smaAligned) strength = Math.min(100, strength * 1.2);
 
-  // Mid-point check for trend consistency
   const midAligned = isUp ? (mid > first && last > mid) : (mid < first && last < mid);
   if (!midAligned) strength *= 0.7;
 
@@ -92,7 +89,22 @@ function analyzeTrend(closes: number[]): { trend: "bullish" | "bearish" | "neutr
   };
 }
 
-async function fetchCoinGeckoOHLC(coinId: string, days: number): Promise<number[][]> {
+// Fetch OHLCV via Binance (primary) or CoinGecko (fallback)
+async function fetchOHLCData(coinId: string, days: number): Promise<number[]> {
+  // Convert CoinGecko ID → AXIOM symbol for Binance
+  const symbol = COINGECKO_TO_SYMBOL[coinId];
+
+  if (symbol) {
+    // Use Binance — much faster, no rate limit issues
+    const interval = days <= 1 ? "1h" as const : days <= 7 ? "4h" as const : "1d" as const;
+    const limit = days <= 1 ? 24 : days <= 7 ? 42 : 30;
+    const candles = await getBinanceOHLCV(symbol, interval, limit);
+    if (candles && candles.length > 3) {
+      return candles.map(c => c.close);
+    }
+  }
+
+  // Fallback: CoinGecko OHLC
   try {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 6000);
@@ -102,7 +114,8 @@ async function fetchCoinGeckoOHLC(coinId: string, days: number): Promise<number[
     );
     clearTimeout(timeoutId);
     if (!res.ok) return [];
-    return await res.json();
+    const ohlc: number[][] = await res.json();
+    return ohlc.map(c => c[4]); // close price
   } catch {
     return [];
   }
@@ -113,13 +126,12 @@ async function analyzeTimeframe(
   period: "1D" | "7D" | "30D",
   days: number,
 ): Promise<TimeframeSignal> {
-  const ohlc = await fetchCoinGeckoOHLC(coinId, days);
+  const closes = await fetchOHLCData(coinId, days);
 
-  if (ohlc.length < 3) {
-    return { period, trend: "neutral", strength: 0, rsi: null, priceChange: 0, detail: "Insufficient data" };
+  if (closes.length < 3) {
+    return { period, trend: "neutral", strength: 0, rsi: null, priceChange: 0, detail: "Données insuffisantes" };
   }
 
-  const closes = ohlc.map(c => c[4]); // [timestamp, open, high, low, close]
   const first = closes[0];
   const last = closes[closes.length - 1];
   const priceChange = ((last - first) / first) * 100;
@@ -137,7 +149,6 @@ export async function getMultiTimeframeData(coinId: string): Promise<MultiTimefr
   const redis = getRedis();
   const cacheKey = `${CACHE_KEY_PREFIX}:${coinId}`;
 
-  // Check cache
   try {
     const cached = await redis.get<MultiTimeframeData>(cacheKey);
     if (cached && Date.now() - cached.timestamp < CACHE_TTL * 1000) {
@@ -145,7 +156,7 @@ export async function getMultiTimeframeData(coinId: string): Promise<MultiTimefr
     }
   } catch { /* cache miss */ }
 
-  // Fetch all timeframes in parallel
+  // Fetch all timeframes — Binance is fast enough for parallel
   const [tf1d, tf7d, tf30d] = await Promise.all([
     analyzeTimeframe(coinId, "1D", 1),
     analyzeTimeframe(coinId, "7D", 7),
@@ -154,7 +165,6 @@ export async function getMultiTimeframeData(coinId: string): Promise<MultiTimefr
 
   const timeframes = [tf1d, tf7d, tf30d];
 
-  // Determine alignment
   const bullish = timeframes.filter(tf => tf.trend === "bullish").length;
   const bearish = timeframes.filter(tf => tf.trend === "bearish").length;
 
@@ -176,14 +186,9 @@ export async function getMultiTimeframeData(coinId: string): Promise<MultiTimefr
   }
 
   const data: MultiTimeframeData = {
-    coinId,
-    timeframes,
-    alignment,
-    alignmentStrength,
-    timestamp: Date.now(),
+    coinId, timeframes, alignment, alignmentStrength, timestamp: Date.now(),
   };
 
-  // Cache
   try {
     await redis.set(cacheKey, JSON.stringify(data), { ex: CACHE_TTL });
   } catch { /* non-critical */ }
@@ -201,16 +206,14 @@ export function scoreMultiTimeframe(data: MultiTimeframeData): {
 } {
   const factors: { name: string; score: number; detail: string }[] = [];
 
-  // Score each timeframe
   for (const tf of data.timeframes) {
     let s = 0;
     if (tf.trend === "bullish") s = Math.round(tf.strength * 0.6);
     else if (tf.trend === "bearish") s = -Math.round(tf.strength * 0.6);
 
-    // RSI adjustment
     if (tf.rsi !== null) {
-      if (tf.rsi < 30) s += 20; // Oversold = bullish
-      else if (tf.rsi > 70) s -= 20; // Overbought = bearish
+      if (tf.rsi < 30) s += 20;
+      else if (tf.rsi > 70) s -= 20;
     }
 
     factors.push({
@@ -220,11 +223,9 @@ export function scoreMultiTimeframe(data: MultiTimeframeData): {
     });
   }
 
-  // Alignment bonus/penalty
   let alignmentBonus = 0;
   if (data.alignment === "aligned_bullish") alignmentBonus = 25;
   else if (data.alignment === "aligned_bearish") alignmentBonus = -25;
-  else if (data.alignment === "mixed") alignmentBonus = 0; // Mixed = uncertain
 
   if (alignmentBonus !== 0) {
     factors.push({

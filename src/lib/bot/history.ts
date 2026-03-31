@@ -173,7 +173,7 @@ export function generateInitialHistory(config: BotConfig): {
       id: uid(),
       timestamp: exitTime,
       type: "close",
-      message: `${isWin ? "\u{1F4B0}" : "\u{1F6D1}"} CLOSE ${direction} ${label} @ $${exitPrice.toFixed(2)} \u2014 P&L: ${pnl >= 0 ? "+" : ""}$${pnl.toFixed(2)} \u2014 ${closeReason === "take_profit" ? "Take Profit atteint" : closeReason === "stop_loss" ? "Stop Loss touch\u00e9" : closeReason === "trailing_stop" ? "Trailing Stop d\u00e9clench\u00e9" : "Signal IA invers\u00e9"}`,
+      message: `${isWin ? "💰" : "🛑"} CLOSE ${direction} ${label} @ $${exitPrice.toFixed(2)} — P&L: ${pnl >= 0 ? "+" : ""}$${pnl.toFixed(2)} — ${closeReason === "take_profit" ? "Take Profit atteint" : closeReason === "stop_loss" ? "Stop Loss touché" : closeReason === "trailing_stop" ? "Trailing Stop déclenché" : "Signal IA inversé"}`,
     });
   }
 
