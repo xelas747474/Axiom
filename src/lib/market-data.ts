@@ -1,7 +1,7 @@
 // ============================================
 // Market Data Abstraction Layer
 // THE SINGLE SOURCE OF TRUTH for all market data in AXIOM
-// Primary: Binance | Fallback: CoinGecko | Last resort: Redis stale cache
+// Primary: Binance (multi-endpoint) | Fallback: CoinGecko | Last resort: Redis stale cache
 // ============================================
 
 import {
@@ -120,13 +120,22 @@ export async function getOHLCV(
     if (cached && cached.length > 0) return cached;
   } catch { /* continue */ }
 
-  // Binance primary
+  // Binance primary (with multi-endpoint fallback)
   const data = await getBinanceOHLCV(symbol, interval, limit);
   if (data && data.length > 0) {
     try {
       await redis.set(cacheKey, data, { ex: cacheTTL });
     } catch { /* non-critical */ }
     return data;
+  }
+
+  // CoinGecko OHLC fallback
+  const cgData = await fetchCoinGeckoOHLC(symbol, intervalToDays(interval, limit));
+  if (cgData.length > 0) {
+    try {
+      await redis.set(cacheKey, cgData, { ex: cacheTTL });
+    } catch { /* non-critical */ }
+    return cgData;
   }
 
   return [];
@@ -150,13 +159,81 @@ export async function getHistoricalOHLCV(
     if (cached && cached.length > 0) return cached;
   } catch { /* continue */ }
 
+  // Binance primary (multi-endpoint fallback already in getBinanceHistoricalOHLCV)
   const data = await getBinanceHistoricalOHLCV(symbol, interval, days);
 
   if (data.length > 0) {
     try {
       await redis.set(cacheKey, data, { ex: 3600 });
     } catch { /* non-critical */ }
+    return data;
   }
 
-  return data;
+  // CoinGecko OHLC fallback for backtest
+  console.log(`[market-data] Binance historical failed for ${symbol}/${days}d, trying CoinGecko`);
+  const cgData = await fetchCoinGeckoOHLC(symbol, days);
+  if (cgData.length > 0) {
+    try {
+      await redis.set(cacheKey, cgData, { ex: 3600 });
+    } catch { /* non-critical */ }
+    return cgData;
+  }
+
+  console.error(`[market-data] No OHLCV data available for ${symbol}/${days}d from any source`);
+  return [];
+}
+
+// ============================================
+// CoinGecko OHLC fallback
+// ============================================
+
+function intervalToDays(interval: BinanceInterval, limit: number): number {
+  const hours: Record<string, number> = {
+    "1m": limit / 60, "5m": (limit * 5) / 60, "15m": (limit * 15) / 60,
+    "1h": limit / 24, "4h": (limit * 4) / 24, "1d": limit, "1w": limit * 7,
+  };
+  return Math.max(1, Math.ceil(hours[interval] ?? 7));
+}
+
+async function fetchCoinGeckoOHLC(symbol: string, days: number): Promise<OHLCVCandle[]> {
+  const coinId = COINGECKO_IDS[symbol];
+  if (!coinId) return [];
+
+  // CoinGecko OHLC endpoint: /coins/{id}/ohlc?vs_currency=usd&days=N
+  // Available days: 1, 7, 14, 30, 90, 180, 365, max
+  const validDays = [1, 7, 14, 30, 90, 180, 365];
+  const cgDays = validDays.find((d) => d >= days) ?? 365;
+
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
+    const url = `https://api.coingecko.com/api/v3/coins/${coinId}/ohlc?vs_currency=usd&days=${cgDays}`;
+    console.log(`[market-data] CoinGecko OHLC fallback: ${url}`);
+
+    const res = await fetch(url, { signal: controller.signal, cache: "no-store" });
+    clearTimeout(timeoutId);
+
+    if (!res.ok) {
+      console.warn(`[market-data] CoinGecko OHLC ${res.status} for ${coinId}`);
+      return [];
+    }
+
+    // CoinGecko returns [[timestamp, open, high, low, close], ...]
+    const raw: number[][] = await res.json();
+    if (!Array.isArray(raw) || raw.length === 0) return [];
+
+    console.log(`[market-data] CoinGecko returned ${raw.length} candles for ${coinId}/${cgDays}d`);
+
+    return raw.map((c) => ({
+      timestamp: c[0],
+      open: c[1],
+      high: c[2],
+      low: c[3],
+      close: c[4],
+      volume: 0, // CoinGecko OHLC doesn't include volume
+    }));
+  } catch (err) {
+    console.warn(`[market-data] CoinGecko OHLC failed for ${coinId}: ${err instanceof Error ? err.message : String(err)}`);
+    return [];
+  }
 }
