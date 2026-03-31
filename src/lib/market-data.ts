@@ -34,7 +34,7 @@ export async function getCurrentPrices(): Promise<Record<string, TickerData>> {
   const binancePrices = await getAllBinancePrices();
   if (Object.keys(binancePrices).length > 0) {
     try {
-      await redis.set("axiom:cache:prices:v2", JSON.stringify(binancePrices), { ex: 15 });
+      await redis.set("axiom:cache:prices:v2", binancePrices, { ex: 15 });
     } catch { /* non-critical */ }
     return binancePrices;
   }
@@ -68,7 +68,7 @@ export async function getCurrentPrices(): Promise<Record<string, TickerData>> {
 
       if (Object.keys(mapped).length > 0) {
         try {
-          await redis.set("axiom:cache:prices:v2", JSON.stringify(mapped), { ex: 15 });
+          await redis.set("axiom:cache:prices:v2", mapped, { ex: 15 });
         } catch { /* non-critical */ }
         return mapped;
       }
@@ -124,7 +124,7 @@ export async function getOHLCV(
   const data = await getBinanceOHLCV(symbol, interval, limit);
   if (data && data.length > 0) {
     try {
-      await redis.set(cacheKey, JSON.stringify(data), { ex: cacheTTL });
+      await redis.set(cacheKey, data, { ex: cacheTTL });
     } catch { /* non-critical */ }
     return data;
   }
@@ -154,7 +154,7 @@ export async function getHistoricalOHLCV(
 
   if (data.length > 0) {
     try {
-      await redis.set(cacheKey, JSON.stringify(data), { ex: 3600 });
+      await redis.set(cacheKey, data, { ex: 3600 });
     } catch { /* non-critical */ }
   }
 
