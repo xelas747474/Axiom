@@ -21,7 +21,7 @@ interface PricesResponse {
   fetchedAt: number;
 }
 
-export function usePrices(refreshInterval = 60000) {
+export function usePrices(refreshInterval = 15000) {
   const [prices, setPrices] = useState<CoinPrice[] | null>(null);
   const [source, setSource] = useState<string>("loading");
   const [fetchedAt, setFetchedAt] = useState<number>(0);

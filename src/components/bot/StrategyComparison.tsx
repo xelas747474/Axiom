@@ -185,7 +185,8 @@ export default function StrategyComparison() {
     }, TIMEOUT_MS);
 
     try {
-      const res = await fetch(`/api/market/ohlcv?crypto=${crypto}&days=${days}`);
+      const symbol = CRYPTO_LABELS[crypto] || "BTC";
+      const res = await fetch(`/api/market/ohlcv?symbol=${symbol}&days=${days}`);
       if (!res.ok) throw new Error("Erreur lors du chargement des données OHLCV");
       const ohlcv = await res.json();
       if (!ohlcv.data || !Array.isArray(ohlcv.data) || ohlcv.data.length < 10) {

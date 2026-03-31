@@ -23,15 +23,15 @@ export interface SignalInfo {
 }
 
 const SIGNAL_LEVELS: { min: number; max: number; info: SignalInfo }[] = [
-  { min: -100, max: -80, info: { level: "EXTREME_FEAR", label: "EXTREME FEAR", color: "#dc2626", emoji: "\u{1F631}", description: "Panique sur le march\u00e9 \u2014 opportunit\u00e9 contrarian ?", bgColor: "rgba(220,38,38,0.08)" } },
-  { min: -80,  max: -60, info: { level: "FEAR",         label: "FEAR",         color: "#ef4444", emoji: "\u{1F628}", description: "Sentiment tr\u00e8s n\u00e9gatif \u2014 prudence maximale",        bgColor: "rgba(239,68,68,0.08)" } },
-  { min: -60,  max: -40, info: { level: "HIGH_SELL",    label: "HIGH SELL",    color: "#f97316", emoji: "\u{1F534}", description: "Signaux baissiers dominants",                      bgColor: "rgba(249,115,22,0.07)" } },
-  { min: -40,  max: -20, info: { level: "SELL",         label: "SELL",         color: "#fb923c", emoji: "\u{1F4C9}", description: "Plus de vendeurs que d\u2019acheteurs",                bgColor: "rgba(251,146,60,0.07)" } },
-  { min: -20,  max:  20, info: { level: "NEUTRAL",      label: "NEUTRAL",      color: "#a3a3a3", emoji: "\u2696\uFE0F",  description: "March\u00e9 ind\u00e9cis \u2014 pas de signal clair",            bgColor: "rgba(163,163,163,0.06)" } },
-  { min:  20,  max:  40, info: { level: "BUY",          label: "BUY",          color: "#4ade80", emoji: "\u{1F4C8}", description: "Signaux mod\u00e9r\u00e9ment haussiers",                     bgColor: "rgba(74,222,128,0.08)" } },
-  { min:  40,  max:  60, info: { level: "HIGH_BUY",     label: "HIGH BUY",     color: "#22c55e", emoji: "\u{1F7E2}", description: "Momentum haussier en construction",              bgColor: "rgba(34,197,94,0.08)" } },
-  { min:  60,  max:  80, info: { level: "GREED",        label: "GREED",        color: "#16a34a", emoji: "\u{1F911}", description: "Sentiment tr\u00e8s positif \u2014 attention au FOMO",        bgColor: "rgba(22,163,74,0.08)" } },
-  { min:  80,  max: 100, info: { level: "EXTREME_GREED",label: "EXTREME GREED",color: "#15803d", emoji: "\u{1F680}", description: "Euphorie \u2014 risque de correction \u00e9lev\u00e9",           bgColor: "rgba(21,128,61,0.08)" } },
+  { min: -100, max: -80, info: { level: "EXTREME_FEAR", label: "EXTREME FEAR", color: "#dc2626", emoji: "😱", description: "Panique sur le marché — opportunité contrarian ?", bgColor: "rgba(220,38,38,0.08)" } },
+  { min: -80,  max: -60, info: { level: "FEAR",         label: "FEAR",         color: "#ef4444", emoji: "😨", description: "Sentiment très négatif — prudence maximale",        bgColor: "rgba(239,68,68,0.08)" } },
+  { min: -60,  max: -40, info: { level: "HIGH_SELL",    label: "HIGH SELL",    color: "#f97316", emoji: "🔴", description: "Signaux baissiers dominants",                      bgColor: "rgba(249,115,22,0.07)" } },
+  { min: -40,  max: -20, info: { level: "SELL",         label: "SELL",         color: "#fb923c", emoji: "📉", description: "Plus de vendeurs que d'acheteurs",                bgColor: "rgba(251,146,60,0.07)" } },
+  { min: -20,  max:  20, info: { level: "NEUTRAL",      label: "NEUTRAL",      color: "#a3a3a3", emoji: "⚖️",  description: "Marché indécis — pas de signal clair",            bgColor: "rgba(163,163,163,0.06)" } },
+  { min:  20,  max:  40, info: { level: "BUY",          label: "BUY",          color: "#4ade80", emoji: "📈", description: "Signaux modérément haussiers",                     bgColor: "rgba(74,222,128,0.08)" } },
+  { min:  40,  max:  60, info: { level: "HIGH_BUY",     label: "HIGH BUY",     color: "#22c55e", emoji: "🟢", description: "Momentum haussier en construction",              bgColor: "rgba(34,197,94,0.08)" } },
+  { min:  60,  max:  80, info: { level: "GREED",        label: "GREED",        color: "#16a34a", emoji: "🤑", description: "Sentiment très positif — attention au FOMO",        bgColor: "rgba(22,163,74,0.08)" } },
+  { min:  80,  max: 100, info: { level: "EXTREME_GREED",label: "EXTREME GREED",color: "#15803d", emoji: "🚀", description: "Euphorie — risque de correction élevé",           bgColor: "rgba(21,128,61,0.08)" } },
 ];
 
 export function getSignalInfo(score: number): SignalInfo {
@@ -49,9 +49,9 @@ export function getSignalColor(score: number): string {
 
 export function getScoreLabel(score: number): string {
   if (score > 40) return "(Haussier)";
-  if (score > 10) return "(L\u00e9g\u00e8rement haussier)";
+  if (score > 10) return "(Légèrement haussier)";
   if (score > -10) return "(Neutre)";
-  if (score > -40) return "(L\u00e9g\u00e8rement baissier)";
+  if (score > -40) return "(Légèrement baissier)";
   return "(Baissier)";
 }
 

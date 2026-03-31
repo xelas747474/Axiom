@@ -1,6 +1,6 @@
 // ============================================
-// Cron Job: /api/bot/run — Runs ONCE daily via Vercel Cron (Hobby plan)
-// Simulates 24h of trading retroactively by iterating hourly candles
+// Cron Job: /api/bot/run — Runs every 2 minutes via Vercel Cron (Pro plan)
+// Real-time trading: checks current prices, manages positions, evaluates signals
 // Enhanced with 7-component advanced scoring engine
 // ============================================
 
@@ -30,6 +30,7 @@ import type {
 import { STRATEGIES, TRADED_CRYPTOS } from "@/lib/bot/types";
 import { computeAISignal } from "@/lib/indicators/scoring";
 import type { OHLCV, AISignalResult } from "@/lib/indicators/types";
+import { getCurrentPrices } from "@/lib/market-data";
 import { getOnChainData, type OnChainData } from "@/lib/onchain";
 import { getSentimentData, type SentimentData } from "@/lib/sentiment";
 import { getLiquidationData, type LiquidationData } from "@/lib/liquidation";
@@ -40,7 +41,10 @@ import { computeAdvancedScore, type AdvancedSignalResult } from "@/lib/advanced-
 import { computePositionSize, computeDynamicLevels, validateTrade } from "@/lib/risk-management";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 30;
+export const maxDuration = 60; // Vercel Pro: 60s (plenty for real-time tick)
+
+const MIN_COOLDOWN_MS = 30 * 60 * 1000; // 30 minutes between trades on same crypto
+const MAX_LOGS = 500;
 
 // ---- Helpers ----
 
@@ -62,7 +66,31 @@ function applySpreadSlip(price: number, direction: TradeDirection, isEntry: bool
   return isEntry ? price * (1 - s) : price * (1 + s);
 }
 
-// ---- Enriched data fetched once per cron run ----
+// ---- Fetch hourly candles from Binance (for technical scoring) ----
+
+async function fetchHourlyCandles(symbol: string, hours: number = 120): Promise<OHLCV[]> {
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
+    const url = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=1h&limit=${hours}`;
+    const res = await fetch(url, { signal: controller.signal, cache: "no-store" });
+    clearTimeout(timeoutId);
+    if (!res.ok) return [];
+    const raw: unknown[][] = await res.json();
+    return raw.map((k) => ({
+      time: Math.floor((k[0] as number) / 1000),
+      open: parseFloat(k[1] as string),
+      high: parseFloat(k[2] as string),
+      low: parseFloat(k[3] as string),
+      close: parseFloat(k[4] as string),
+      volume: parseFloat(k[5] as string),
+    }));
+  } catch {
+    return [];
+  }
+}
+
+// ---- Enriched data (cached in Redis 5min, shared across runs) ----
 
 interface EnrichedData {
   onChain: OnChainData | null;
@@ -75,13 +103,11 @@ async function fetchEnrichedData(
   enabledCryptos: typeof TRADED_CRYPTOS,
   currentPrices: Record<string, number>,
 ): Promise<EnrichedData> {
-  // Fetch global data (on-chain + sentiment) in parallel with per-crypto data
   const [onChain, sentiment] = await Promise.allSettled([
     getOnChainData(),
     getSentimentData(),
   ]);
 
-  // Fetch per-crypto data in parallel
   const liqPromises = enabledCryptos.map(async (c) => {
     try {
       const price = currentPrices[c.symbol] ?? 0;
@@ -123,381 +149,6 @@ async function fetchEnrichedData(
   };
 }
 
-// ---- Fetch 24h hourly candles from Binance ----
-
-async function fetchHourlyCandles(symbol: string, hours: number = 24): Promise<OHLCV[]> {
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 8000);
-    const url = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=1h&limit=${hours + 100}`;
-    const res = await fetch(url, { signal: controller.signal });
-    clearTimeout(timeoutId);
-    if (!res.ok) return [];
-    const raw: unknown[][] = await res.json();
-    return raw.map((k) => ({
-      time: Math.floor((k[0] as number) / 1000),
-      open: parseFloat(k[1] as string),
-      high: parseFloat(k[2] as string),
-      low: parseFloat(k[3] as string),
-      close: parseFloat(k[4] as string),
-      volume: parseFloat(k[5] as string),
-    }));
-  } catch {
-    return [];
-  }
-}
-
-// ---- Simulate one hour tick (enhanced) ----
-
-interface HourSimResult {
-  positions: OpenPosition[];
-  closedTrades: ClosedTrade[];
-  logs: LogEntry[];
-  portfolioValue: number;
-  curvePoints: PortfolioPoint[];
-}
-
-function simulateHourTick(
-  config: BotConfig,
-  state: BotState,
-  positions: OpenPosition[],
-  historyLen: number,
-  allCandles: Record<TradedCrypto, OHLCV[]>,
-  hourIndex: number,
-  hourTimestamp: number,
-  enrichedData: EnrichedData,
-  allHistory: ClosedTrade[],
-): HourSimResult {
-  const logs: LogEntry[] = [];
-  const closedTrades: ClosedTrade[] = [];
-  const curvePoints: PortfolioPoint[] = [];
-  let currentPositions = [...positions];
-  let tradeNum = historyLen + 1;
-  const strat = STRATEGIES[config.strategy];
-
-  const enabledCryptos = TRADED_CRYPTOS.filter((c) => config.enabledCryptos[c.symbol]);
-
-  // Process each enabled crypto for this hour
-  for (const crypto of enabledCryptos) {
-    const candles = allCandles[crypto.symbol];
-    if (!candles || hourIndex >= candles.length) continue;
-
-    const currentCandle = candles[hourIndex];
-    const currentPrice = currentCandle.close;
-    const highPrice = currentCandle.high;
-    const lowPrice = currentCandle.low;
-
-    // Compute technical signal from candles up to this hour (need at least 30)
-    let techSignal: AISignalResult | null = null;
-    const sliceEnd = hourIndex + 1;
-    const sliceStart = Math.max(0, sliceEnd - 100);
-    const candleSlice = candles.slice(sliceStart, sliceEnd);
-    if (candleSlice.length >= 30) {
-      try {
-        techSignal = computeAISignal(candleSlice);
-      } catch {
-        // Skip if computation fails
-      }
-    }
-
-    // Detect market regime from candles
-    let regimeAnalysis: RegimeAnalysis | null = null;
-    if (candleSlice.length >= 30) {
-      try {
-        regimeAnalysis = detectRegime(candleSlice);
-      } catch {
-        // Non-critical
-      }
-    }
-
-    // Compute advanced score (7-component)
-    let advancedSignal: AdvancedSignalResult | null = null;
-    if (techSignal) {
-      try {
-        // Compute 7d price change for sentiment divergence
-        const priceChange7d = candleSlice.length >= 168
-          ? ((currentPrice - candleSlice[candleSlice.length - 168].close) / candleSlice[candleSlice.length - 168].close) * 100
-          : undefined;
-
-        advancedSignal = computeAdvancedScore({
-          technicalSignal: techSignal,
-          onChainData: enrichedData.onChain,
-          sentimentData: enrichedData.sentiment,
-          liquidationData: enrichedData.liquidation[crypto.symbol] ?? null,
-          multiTFData: enrichedData.multiTF[crypto.symbol] ?? null,
-          regimeAnalysis,
-          currentPrice,
-          priceChange7d,
-        });
-      } catch {
-        // Fallback: use tech signal only
-      }
-    }
-
-    // Use advanced score if available, otherwise fall back to technical
-    const effectiveScore = advancedSignal?.globalScore ?? techSignal?.globalScore ?? 0;
-    const effectiveConfidence = advancedSignal?.confidence ?? techSignal?.confidence ?? 0;
-
-    // ---- Tick existing positions for this crypto ----
-    const cryptoPositions = currentPositions.filter((p) => p.crypto === crypto.symbol);
-    for (const pos of cryptoPositions) {
-      // Check if SL was hit during this candle (using high/low)
-      const slPrice = pos.trailingStopPrice ?? pos.stopLoss;
-      const hitSL = pos.direction === "LONG" ? lowPrice <= slPrice : highPrice >= slPrice;
-
-      if (hitSL) {
-        const exitPrice = applySpreadSlip(slPrice, pos.direction, false);
-        const diff = pos.direction === "LONG"
-          ? (exitPrice - pos.entryPrice) / pos.entryPrice
-          : (pos.entryPrice - exitPrice) / pos.entryPrice;
-        const pnl = pos.size * diff;
-        closedTrades.push({
-          id: pos.id,
-          tradeNumber: tradeNum++,
-          crypto: pos.crypto,
-          direction: pos.direction,
-          entryPrice: pos.entryPrice,
-          exitPrice,
-          entryTime: pos.entryTime,
-          exitTime: hourTimestamp,
-          size: pos.size,
-          pnl,
-          pnlPct: diff * 100,
-          result: pnl >= 0 ? "win" : "loss",
-          closeReason: pos.trailingStopPrice ? "trailing_stop" : "stop_loss",
-        });
-        currentPositions = currentPositions.filter((p) => p.id !== pos.id);
-        logs.push({
-          id: uid(), timestamp: hourTimestamp, type: "close" as const,
-          message: `🛑 CLOSE ${pos.direction} ${crypto.label} @ $${slPrice.toFixed(2)} — P&L: ${pnl >= 0 ? "+" : ""}$${pnl.toFixed(2)} — ${pos.trailingStopPrice ? "Trailing stop" : "Stop loss"}`,
-        });
-        continue;
-      }
-
-      // Check if TP was hit
-      const hitTP = pos.direction === "LONG" ? highPrice >= pos.takeProfit : lowPrice <= pos.takeProfit;
-      if (hitTP) {
-        const exitPrice = applySpreadSlip(pos.takeProfit, pos.direction, false);
-        const diff = pos.direction === "LONG"
-          ? (exitPrice - pos.entryPrice) / pos.entryPrice
-          : (pos.entryPrice - exitPrice) / pos.entryPrice;
-        const pnl = pos.size * diff;
-        closedTrades.push({
-          id: pos.id,
-          tradeNumber: tradeNum++,
-          crypto: pos.crypto,
-          direction: pos.direction,
-          entryPrice: pos.entryPrice,
-          exitPrice,
-          entryTime: pos.entryTime,
-          exitTime: hourTimestamp,
-          size: pos.size,
-          pnl,
-          pnlPct: diff * 100,
-          result: "win",
-          closeReason: "take_profit",
-        });
-        currentPositions = currentPositions.filter((p) => p.id !== pos.id);
-        logs.push({
-          id: uid(), timestamp: hourTimestamp, type: "close" as const,
-          message: `💰 CLOSE ${pos.direction} ${crypto.label} @ $${pos.takeProfit.toFixed(2)} — P&L: +$${pnl.toFixed(2)} — Take Profit!`,
-        });
-        continue;
-      }
-
-      // Check signal reversal (using advanced score)
-      const reversed = (pos.direction === "LONG" && effectiveScore < -30)
-        || (pos.direction === "SHORT" && effectiveScore > 30);
-      if (reversed) {
-        const exitPrice = applySpreadSlip(currentPrice, pos.direction, false);
-        const diff = pos.direction === "LONG"
-          ? (exitPrice - pos.entryPrice) / pos.entryPrice
-          : (pos.entryPrice - exitPrice) / pos.entryPrice;
-        const pnl = pos.size * diff;
-        closedTrades.push({
-          id: pos.id,
-          tradeNumber: tradeNum++,
-          crypto: pos.crypto,
-          direction: pos.direction,
-          entryPrice: pos.entryPrice,
-          exitPrice,
-          entryTime: pos.entryTime,
-          exitTime: hourTimestamp,
-          size: pos.size,
-          pnl,
-          pnlPct: diff * 100,
-          result: pnl >= 0 ? "win" : "loss",
-          closeReason: "signal_reversed",
-        });
-        currentPositions = currentPositions.filter((p) => p.id !== pos.id);
-        logs.push({
-          id: uid(), timestamp: hourTimestamp, type: "close" as const,
-          message: `🔄 CLOSE ${pos.direction} ${crypto.label} @ $${currentPrice.toFixed(2)} — P&L: ${pnl >= 0 ? "+" : ""}$${pnl.toFixed(2)} — Signal inversé (score: ${effectiveScore})`,
-        });
-        continue;
-      }
-
-      // Update trailing stop
-      const idx = currentPositions.findIndex((p) => p.id === pos.id);
-      if (idx !== -1) {
-        let ts = pos.trailingStopPrice;
-        if (config.trailingStop && ts !== null) {
-          if (pos.direction === "LONG" && highPrice > pos.entryPrice) {
-            const newTS = highPrice * (1 - strat.stopLossPct / 100);
-            if (newTS > ts) ts = newTS;
-          } else if (pos.direction === "SHORT" && lowPrice < pos.entryPrice) {
-            const newTS = lowPrice * (1 + strat.stopLossPct / 100);
-            if (newTS < ts) ts = newTS;
-          }
-        }
-        const { pnl, pnlPct } = computePnlSimple(pos, currentPrice);
-        currentPositions[idx] = { ...pos, currentPrice, pnl, pnlPct, trailingStopPrice: ts };
-      }
-    }
-
-    // ---- Evaluate new entries (enhanced with advanced engine) ----
-    if (!techSignal) continue;
-    const hasPosition = currentPositions.some((p) => p.crypto === crypto.symbol);
-    if (hasPosition) continue;
-    if (currentPositions.length >= config.maxConcurrentTrades) continue;
-
-    // Check cooldown
-    const lastTrade = state.lastTradeTime[crypto.symbol] ?? 0;
-    const cooldownMs = config.cooldownMinutes * 60 * 1000;
-    if (hourTimestamp - lastTrade < cooldownMs && lastTrade > 0) continue;
-
-    // Use advanced score threshold with regime adjustment
-    const absScore = Math.abs(effectiveScore);
-    if (absScore < strat.scoreThreshold) continue;
-
-    // Determine direction from advanced signal or fallback to technical
-    let direction: TradeDirection | null = advancedSignal?.recommendedDirection ?? null;
-
-    if (!direction) {
-      // Fallback: original logic
-      const score = techSignal.globalScore;
-      const momentum = techSignal.categories.find((c) => c.category === "Momentum");
-      const trend = techSignal.categories.find((c) => c.category === "Tendance" || c.category === "Trend");
-      const volume = techSignal.categories.find((c) => c.category === "Volume");
-      const rsiScore = momentum?.indicators.find((i) => i.name === "RSI")?.score ?? 0;
-      const macdScore = trend?.indicators.find((i) => i.name === "MACD")?.score ?? 0;
-      const smaScore = trend?.indicators.find((i) => i.name.includes("SMA") || i.name.includes("EMA"))?.score ?? 0;
-      const volumeScore = volume?.indicators.find((i) => i.name.includes("Volume") || i.name.includes("OBV"))?.score ?? 0;
-
-      if (score > strat.scoreThreshold) {
-        const conditions = [true, rsiScore > -50, macdScore > -10, smaScore > -20, volumeScore > -20];
-        if (conditions.filter(Boolean).length >= 3) direction = "LONG";
-      } else if (score < -strat.scoreThreshold) {
-        const conditions = [true, rsiScore < 50, macdScore < 10, smaScore < 20, volumeScore > -20];
-        if (conditions.filter(Boolean).length >= 3) direction = "SHORT";
-      }
-    }
-
-    if (!direction) continue;
-
-    // ---- Anti-trade filters ----
-    const combinedHistory = [...allHistory, ...closedTrades];
-    const consecutiveLosses = countConsecutiveLosses(combinedHistory);
-    const hourUTC = new Date(hourTimestamp).getUTCHours();
-
-    const antiTradeResult = evaluateAntiTradeFilters(
-      {
-        recentTrades: combinedHistory.slice(-10),
-        currentHourUTC: hourUTC,
-        regime: regimeAnalysis?.regime ?? "ranging",
-        sentiment: enrichedData.sentiment,
-        consecutiveLosses,
-        currentDrawdownPct: state.currentDrawdown,
-        maxDrawdownPct: config.maxDrawdownPct,
-      },
-      direction,
-    );
-
-    if (!antiTradeResult.shouldTrade) {
-      logs.push({
-        id: uid(), timestamp: hourTimestamp, type: "info" as const,
-        message: `🚫 BLOCKED ${direction} ${crypto.label} — ${antiTradeResult.reasons.join(", ")}`,
-      });
-      continue;
-    }
-
-    // ---- Position sizing (Kelly criterion) ----
-    const positionSizing = computePositionSize(
-      config, state, combinedHistory,
-      regimeAnalysis, effectiveConfidence,
-    );
-    const allocation = config.allocations[crypto.symbol] / 100;
-    const size = Math.min(
-      positionSizing.size * allocation * (100 / Math.max(config.allocations[crypto.symbol], 1)),
-      state.portfolioValue * (strat.positionSizePct / 100),
-    );
-
-    const entryPrice = applySpreadSlip(currentPrice, direction, true);
-
-    // ---- Dynamic SL/TP ----
-    const atrValue = techSignal.stopLoss
-      ? Math.abs(techSignal.entryPrice - techSignal.stopLoss) / 2
-      : currentPrice * 0.02;
-
-    const dynamicLevels = computeDynamicLevels(
-      entryPrice, direction, atrValue,
-      config, regimeAnalysis, effectiveConfidence,
-    );
-
-    // Validate minimum risk/reward
-    const rrCheck = validateTrade(entryPrice, dynamicLevels.stopLoss, dynamicLevels.takeProfit1);
-    if (!rrCheck.valid) {
-      logs.push({
-        id: uid(), timestamp: hourTimestamp, type: "info" as const,
-        message: `⚠️ SKIP ${direction} ${crypto.label} — ${rrCheck.reason}`,
-      });
-      continue;
-    }
-
-    const newPos: OpenPosition = {
-      id: uid(),
-      crypto: crypto.symbol,
-      direction,
-      entryPrice,
-      entryTime: hourTimestamp,
-      size,
-      stopLoss: dynamicLevels.stopLoss,
-      takeProfit: dynamicLevels.takeProfit1,
-      trailingStopPrice: config.trailingStop ? dynamicLevels.stopLoss : null,
-      currentPrice,
-      pnl: 0,
-      pnlPct: 0,
-    };
-    currentPositions.push(newPos);
-    state.lastTradeTime[crypto.symbol] = hourTimestamp;
-
-    // Enriched log with reasoning
-    const regimeStr = regimeAnalysis ? ` | Regime: ${regimeAnalysis.regime}` : "";
-    const reasoningStr = advancedSignal?.reasoning ?? "";
-    logs.push({
-      id: uid(), timestamp: hourTimestamp, type: "open" as const,
-      message: `✅ OPEN ${direction} ${crypto.label} @ $${entryPrice.toFixed(2)} — Size: $${size.toFixed(0)} (Kelly: ${(positionSizing.kellyFraction * 100).toFixed(1)}%) — SL: $${dynamicLevels.stopLoss.toFixed(2)} — TP: $${dynamicLevels.takeProfit1.toFixed(2)} (R:R ${rrCheck.rr.toFixed(1)}:1)${regimeStr}`,
-    });
-    if (reasoningStr) {
-      logs.push({
-        id: uid(), timestamp: hourTimestamp, type: "info" as const,
-        message: `🧠 ${crypto.label}: ${reasoningStr}`,
-      });
-    }
-  }
-
-  // Calculate portfolio value
-  const positionsPnl = currentPositions.reduce((sum, p) => sum + p.pnl, 0);
-  const closedPnl = closedTrades.reduce((sum, t) => sum + t.pnl, 0);
-  const capitalInPositions = currentPositions.reduce((sum, p) => sum + p.size, 0);
-  const freeCapital = state.portfolioValue - capitalInPositions + closedPnl;
-  const portfolioValue = freeCapital + capitalInPositions + positionsPnl;
-
-  curvePoints.push({ t: hourTimestamp, v: portfolioValue });
-
-  return { positions: currentPositions, closedTrades, logs, portfolioValue, curvePoints };
-}
-
 function computePnlSimple(pos: OpenPosition, currentPrice: number): { pnl: number; pnlPct: number } {
   const exitPrice = applySpreadSlip(currentPrice, pos.direction, false);
   const diff = pos.direction === "LONG"
@@ -506,7 +157,7 @@ function computePnlSimple(pos: OpenPosition, currentPrice: number): { pnl: numbe
   return { pnl: pos.size * diff, pnlPct: diff * 100 };
 }
 
-// ---- Main Route Handler ----
+// ---- Main Route Handler (every 2 minutes) ----
 
 export async function GET(request: Request) {
   // Verify CRON_SECRET
@@ -525,16 +176,34 @@ export async function GET(request: Request) {
     }
 
     const config = await loadConfigRedis();
-    const positions = await loadPositionsRedis();
+    let positions = await loadPositionsRedis();
     const history = await loadHistoryRedis();
     const curve = await loadCurveRedis();
-    const logs = await loadLogsRedis();
+    const existingLogs = await loadLogsRedis();
 
-    // ---- Fetch 24h hourly candles for all enabled cryptos ----
+    const now = Date.now();
+    const strat = STRATEGIES[config.strategy];
     const enabledCryptos = TRADED_CRYPTOS.filter((c) => config.enabledCryptos[c.symbol]);
+
+    // ---- Fetch current prices from Binance (single call) ----
+    const allPrices = await getCurrentPrices();
+    const currentPrices: Record<string, number> = {};
+    for (const c of enabledCryptos) {
+      // Map BTCUSDT → BTC for market-data lookup
+      const sym = c.symbol.replace("USDT", "");
+      if (allPrices[sym]) {
+        currentPrices[c.symbol] = allPrices[sym].price;
+      }
+    }
+
+    if (Object.keys(currentPrices).length === 0) {
+      return Response.json({ status: "error", error: "No price data available" }, { status: 500 });
+    }
+
+    // ---- Fetch candles for technical analysis (in parallel) ----
     const candleResults = await Promise.all(
       enabledCryptos.map(async (c) => {
-        const candles = await fetchHourlyCandles(c.symbol, 24);
+        const candles = await fetchHourlyCandles(c.symbol, 120);
         return { symbol: c.symbol, candles };
       }),
     );
@@ -544,23 +213,7 @@ export async function GET(request: Request) {
       allCandles[r.symbol] = r.candles;
     }
 
-    // Determine how many hours to simulate (last 24 from candle data)
-    const maxCandles = Math.max(...Object.values(allCandles).map((c) => c.length), 0);
-    if (maxCandles === 0) {
-      return Response.json({ status: "error", error: "No candle data available" }, { status: 500 });
-    }
-
-    // Get current prices for enriched data fetching
-    const currentPrices: Record<string, number> = {};
-    for (const c of enabledCryptos) {
-      const candles = allCandles[c.symbol];
-      if (candles && candles.length > 0) {
-        currentPrices[c.symbol] = candles[candles.length - 1].close;
-      }
-    }
-
-    // ---- Fetch enriched data (on-chain, sentiment, liquidation, multi-TF) ----
-    // This runs once per cron, not per hour — cached in Redis (5min TTL)
+    // ---- Fetch enriched data (cached 5min in Redis) ----
     let enrichedData: EnrichedData;
     try {
       enrichedData = await fetchEnrichedData(enabledCryptos, currentPrices);
@@ -568,140 +221,299 @@ export async function GET(request: Request) {
       enrichedData = { onChain: null, sentiment: null, liquidation: {}, multiTF: {} };
     }
 
-    // Start simulation from 24h ago (or whatever data we have)
-    const startIndex = Math.max(0, maxCandles - 24);
-    const simState = { ...state };
-    let simPositions = [...positions];
-    const allClosedTrades: ClosedTrade[] = [];
-    const allLogs: LogEntry[] = [];
-    const allCurvePoints: PortfolioPoint[] = [];
+    const newLogs: LogEntry[] = [];
+    const closedTrades: ClosedTrade[] = [];
+    const curvePoints: PortfolioPoint[] = [];
+    let tradeNum = history.length + 1;
 
-    // Add start log with enriched data status
-    const dataStatus = [
-      enrichedData.onChain ? "on-chain" : null,
-      enrichedData.sentiment ? "sentiment" : null,
-      Object.values(enrichedData.liquidation).some(Boolean) ? "liquidation" : null,
-      Object.values(enrichedData.multiTF).some(Boolean) ? "multi-TF" : null,
-    ].filter(Boolean).join(", ");
+    // ---- Process each enabled crypto ----
+    for (const crypto of enabledCryptos) {
+      const currentPrice = currentPrices[crypto.symbol];
+      if (!currentPrice || currentPrice <= 0) continue;
 
-    allLogs.push({
-      id: uid(),
-      timestamp: Date.now(),
-      type: "info" as const,
-      message: `🤖 Batch journalier — Simulation de ${maxCandles - startIndex}h — Engine v2 (7 composants)${dataStatus ? ` — Data: ${dataStatus}` : ""}`,
-    });
+      const candles = allCandles[crypto.symbol];
+      const label = crypto.label;
 
-    // Iterate hour by hour
-    for (let i = startIndex; i < maxCandles; i++) {
-      // Get timestamp from any available candle at this index
-      let hourTimestamp = Date.now();
-      for (const c of enabledCryptos) {
-        const candles = allCandles[c.symbol];
-        if (candles && i < candles.length) {
-          hourTimestamp = candles[i].time * 1000; // Convert to ms
-          break;
+      // ---- 1. Check existing positions (SL/TP/trailing/reversal) ----
+      const cryptoPositions = positions.filter((p) => p.crypto === crypto.symbol);
+      for (const pos of cryptoPositions) {
+        const slPrice = pos.trailingStopPrice ?? pos.stopLoss;
+
+        // Stop loss check
+        const hitSL = pos.direction === "LONG" ? currentPrice <= slPrice : currentPrice >= slPrice;
+        if (hitSL) {
+          const exitPrice = applySpreadSlip(slPrice, pos.direction, false);
+          const diff = pos.direction === "LONG"
+            ? (exitPrice - pos.entryPrice) / pos.entryPrice
+            : (pos.entryPrice - exitPrice) / pos.entryPrice;
+          const pnl = pos.size * diff;
+          closedTrades.push({
+            id: pos.id, tradeNumber: tradeNum++, crypto: pos.crypto, direction: pos.direction,
+            entryPrice: pos.entryPrice, exitPrice, entryTime: pos.entryTime, exitTime: now,
+            size: pos.size, pnl, pnlPct: diff * 100,
+            result: pnl >= 0 ? "win" : "loss",
+            closeReason: pos.trailingStopPrice ? "trailing_stop" : "stop_loss",
+          });
+          positions = positions.filter((p) => p.id !== pos.id);
+          newLogs.push({
+            id: uid(), timestamp: now, type: "close",
+            message: `🛑 CLOSE ${pos.direction} ${label} @ $${exitPrice.toFixed(2)} — P&L: ${pnl >= 0 ? "+" : ""}$${pnl.toFixed(2)} — ${pos.trailingStopPrice ? "Trailing Stop" : "Stop Loss"}`,
+          });
+          continue;
+        }
+
+        // Take profit check
+        const hitTP = pos.direction === "LONG" ? currentPrice >= pos.takeProfit : currentPrice <= pos.takeProfit;
+        if (hitTP) {
+          const exitPrice = applySpreadSlip(pos.takeProfit, pos.direction, false);
+          const diff = pos.direction === "LONG"
+            ? (exitPrice - pos.entryPrice) / pos.entryPrice
+            : (pos.entryPrice - exitPrice) / pos.entryPrice;
+          const pnl = pos.size * diff;
+          closedTrades.push({
+            id: pos.id, tradeNumber: tradeNum++, crypto: pos.crypto, direction: pos.direction,
+            entryPrice: pos.entryPrice, exitPrice, entryTime: pos.entryTime, exitTime: now,
+            size: pos.size, pnl, pnlPct: diff * 100, result: "win", closeReason: "take_profit",
+          });
+          positions = positions.filter((p) => p.id !== pos.id);
+          newLogs.push({
+            id: uid(), timestamp: now, type: "close",
+            message: `💰 CLOSE ${pos.direction} ${label} @ $${exitPrice.toFixed(2)} — P&L: +$${pnl.toFixed(2)} — Take Profit!`,
+          });
+          continue;
+        }
+
+        // Update trailing stop
+        const idx = positions.findIndex((p) => p.id === pos.id);
+        if (idx !== -1) {
+          let ts = pos.trailingStopPrice;
+          if (config.trailingStop && ts !== null) {
+            if (pos.direction === "LONG" && currentPrice > pos.entryPrice) {
+              const newTS = currentPrice * (1 - strat.stopLossPct / 100);
+              if (newTS > ts) {
+                newLogs.push({
+                  id: uid(), timestamp: now, type: "info",
+                  message: `📈 ${label} ${pos.direction} — Trailing stop: $${ts.toFixed(2)} → $${newTS.toFixed(2)}`,
+                });
+                ts = newTS;
+              }
+            } else if (pos.direction === "SHORT" && currentPrice < pos.entryPrice) {
+              const newTS = currentPrice * (1 + strat.stopLossPct / 100);
+              if (newTS < ts) {
+                newLogs.push({
+                  id: uid(), timestamp: now, type: "info",
+                  message: `📉 ${label} ${pos.direction} — Trailing stop: $${ts.toFixed(2)} → $${newTS.toFixed(2)}`,
+                });
+                ts = newTS;
+              }
+            }
+          }
+          const { pnl, pnlPct } = computePnlSimple(pos, currentPrice);
+          positions[idx] = { ...pos, currentPrice, pnl, pnlPct, trailingStopPrice: ts };
         }
       }
 
-      const result = simulateHourTick(
-        config,
-        simState,
-        simPositions,
-        history.length + allClosedTrades.length,
-        allCandles as Record<TradedCrypto, OHLCV[]>,
-        i,
-        hourTimestamp,
-        enrichedData,
-        [...history, ...allClosedTrades],
+      // ---- 2. Evaluate new entries ----
+      // Skip if already have a position on this crypto
+      if (positions.some((p) => p.crypto === crypto.symbol)) continue;
+      if (positions.length >= config.maxConcurrentTrades) continue;
+
+      // 30-minute cooldown per crypto
+      const lastTrade = state.lastTradeTime[crypto.symbol] ?? 0;
+      if (now - lastTrade < MIN_COOLDOWN_MS && lastTrade > 0) continue;
+
+      // Need candles for technical analysis
+      if (!candles || candles.length < 30) continue;
+
+      // Compute technical signal
+      let techSignal: AISignalResult | null = null;
+      try {
+        techSignal = computeAISignal(candles);
+      } catch { continue; }
+
+      // Compute regime
+      let regimeAnalysis: RegimeAnalysis | null = null;
+      try { regimeAnalysis = detectRegime(candles); } catch { /* non-critical */ }
+
+      // Compute advanced 7-component score
+      let advancedSignal: AdvancedSignalResult | null = null;
+      if (techSignal) {
+        try {
+          const priceChange7d = candles.length >= 168
+            ? ((currentPrice - candles[candles.length - 168].close) / candles[candles.length - 168].close) * 100
+            : undefined;
+
+          advancedSignal = computeAdvancedScore({
+            technicalSignal: techSignal,
+            onChainData: enrichedData.onChain,
+            sentimentData: enrichedData.sentiment,
+            liquidationData: enrichedData.liquidation[crypto.symbol] ?? null,
+            multiTFData: enrichedData.multiTF[crypto.symbol] ?? null,
+            regimeAnalysis,
+            currentPrice,
+            priceChange7d,
+          });
+        } catch { /* fallback to tech signal */ }
+      }
+
+      const effectiveScore = advancedSignal?.globalScore ?? techSignal?.globalScore ?? 0;
+      const effectiveConfidence = advancedSignal?.confidence ?? techSignal?.confidence ?? 0;
+      const absScore = Math.abs(effectiveScore);
+
+      if (absScore < strat.scoreThreshold) continue;
+
+      // Determine direction
+      let direction: TradeDirection | null = advancedSignal?.recommendedDirection ?? null;
+      if (!direction) {
+        if (effectiveScore > strat.scoreThreshold) direction = "LONG";
+        else if (effectiveScore < -strat.scoreThreshold) direction = "SHORT";
+      }
+      if (!direction) continue;
+
+      // Anti-trade filters
+      const combinedHistory = [...history, ...closedTrades];
+      const consecutiveLosses = countConsecutiveLosses(combinedHistory);
+      const hourUTC = new Date(now).getUTCHours();
+
+      const antiTradeResult = evaluateAntiTradeFilters(
+        {
+          recentTrades: combinedHistory.slice(-10),
+          currentHourUTC: hourUTC,
+          regime: regimeAnalysis?.regime ?? "ranging",
+          sentiment: enrichedData.sentiment,
+          consecutiveLosses,
+          currentDrawdownPct: state.currentDrawdown,
+          maxDrawdownPct: config.maxDrawdownPct,
+        },
+        direction,
       );
 
-      simPositions = result.positions;
-      allClosedTrades.push(...result.closedTrades);
-      allLogs.push(...result.logs);
-      allCurvePoints.push(...result.curvePoints);
-
-      // Update state for next iteration
-      simState.portfolioValue = result.portfolioValue;
-      if (result.portfolioValue > simState.peakValue) {
-        simState.peakValue = result.portfolioValue;
-      }
-      simState.currentDrawdown = simState.peakValue > 0
-        ? ((simState.peakValue - result.portfolioValue) / simState.peakValue) * 100
-        : 0;
-
-      // Check max drawdown auto-stop
-      if (simState.currentDrawdown >= config.maxDrawdownPct) {
-        simState.running = false;
-        allLogs.push({
-          id: uid(),
-          timestamp: hourTimestamp,
-          type: "warning" as const,
-          message: `⛔ MAX DRAWDOWN ATTEINT (${simState.currentDrawdown.toFixed(1)}%) — Bot arrêté automatiquement`,
+      if (!antiTradeResult.shouldTrade) {
+        newLogs.push({
+          id: uid(), timestamp: now, type: "info",
+          message: `🚫 BLOCKED ${direction} ${label} — ${antiTradeResult.reasons.join(", ")}`,
         });
-        break;
+        continue;
+      }
+
+      // Position sizing (Kelly)
+      const positionSizing = computePositionSize(
+        config, state, combinedHistory, regimeAnalysis, effectiveConfidence,
+      );
+      const allocation = config.allocations[crypto.symbol] / 100;
+      const size = Math.min(
+        positionSizing.size * allocation * (100 / Math.max(config.allocations[crypto.symbol], 1)),
+        state.portfolioValue * (strat.positionSizePct / 100),
+      );
+
+      const entryPrice = applySpreadSlip(currentPrice, direction, true);
+
+      // Dynamic SL/TP
+      const atrValue = techSignal?.stopLoss
+        ? Math.abs(techSignal.entryPrice - techSignal.stopLoss) / 2
+        : currentPrice * 0.02;
+
+      const dynamicLevels = computeDynamicLevels(
+        entryPrice, direction, atrValue, config, regimeAnalysis, effectiveConfidence,
+      );
+
+      const rrCheck = validateTrade(entryPrice, dynamicLevels.stopLoss, dynamicLevels.takeProfit1);
+      if (!rrCheck.valid) {
+        newLogs.push({
+          id: uid(), timestamp: now, type: "info",
+          message: `⚠️ SKIP ${direction} ${label} — ${rrCheck.reason}`,
+        });
+        continue;
+      }
+
+      const newPos: OpenPosition = {
+        id: uid(), crypto: crypto.symbol, direction, entryPrice, entryTime: now,
+        size, stopLoss: dynamicLevels.stopLoss, takeProfit: dynamicLevels.takeProfit1,
+        trailingStopPrice: config.trailingStop ? dynamicLevels.stopLoss : null,
+        currentPrice, pnl: 0, pnlPct: 0,
+      };
+      positions.push(newPos);
+      state.lastTradeTime[crypto.symbol] = now;
+
+      const regimeStr = regimeAnalysis ? ` | Régime: ${regimeAnalysis.regime}` : "";
+      const reasoning = advancedSignal?.reasoning ?? "";
+      newLogs.push({
+        id: uid(), timestamp: now, type: "open",
+        message: `✅ OPEN ${direction} ${label} @ $${entryPrice.toFixed(2)} — Size: $${size.toFixed(0)} — SL: $${dynamicLevels.stopLoss.toFixed(2)} — TP: $${dynamicLevels.takeProfit1.toFixed(2)} (R:R ${rrCheck.rr.toFixed(1)}:1)${regimeStr}`,
+      });
+      if (reasoning) {
+        newLogs.push({
+          id: uid(), timestamp: now, type: "info",
+          message: `🧠 ${label}: ${reasoning}`,
+        });
       }
     }
 
-    // Update today stats
+    // ---- Update portfolio value ----
+    const positionsPnl = positions.reduce((sum, p) => sum + p.pnl, 0);
+    const closedPnl = closedTrades.reduce((sum, t) => sum + t.pnl, 0);
+    const capitalInPositions = positions.reduce((sum, p) => sum + p.size, 0);
+    const freeCapital = state.portfolioValue - capitalInPositions + closedPnl;
+    state.portfolioValue = freeCapital + capitalInPositions + positionsPnl;
+
+    if (state.portfolioValue > state.peakValue) {
+      state.peakValue = state.portfolioValue;
+    }
+    state.currentDrawdown = state.peakValue > 0
+      ? ((state.peakValue - state.portfolioValue) / state.peakValue) * 100
+      : 0;
+
+    // Add curve point
+    curvePoints.push({ t: now, v: state.portfolioValue });
+
+    // Max drawdown auto-stop
+    if (state.currentDrawdown >= config.maxDrawdownPct) {
+      state.running = false;
+      newLogs.push({
+        id: uid(), timestamp: now, type: "warning",
+        message: `⛔ MAX DRAWDOWN (${state.currentDrawdown.toFixed(1)}%) — Bot arrêté`,
+      });
+    }
+
+    // Today stats
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
-    const todayPnl = allClosedTrades
+    state.todayPnl = [...history, ...closedTrades]
       .filter((t) => t.exitTime >= todayStart.getTime())
       .reduce((sum, t) => sum + t.pnl, 0);
-    simState.todayPnl = todayPnl;
-    simState.todayTradeCount = allClosedTrades.length;
+    state.todayTradeCount = [...history, ...closedTrades]
+      .filter((t) => t.exitTime >= todayStart.getTime()).length;
 
-    // Update last trade times
-    for (const trade of allClosedTrades) {
-      simState.lastTradeTime[trade.crypto] = trade.exitTime;
+    for (const trade of closedTrades) {
+      state.lastTradeTime[trade.crypto] = trade.exitTime;
     }
 
-    // Summary log
-    const totalPnlPct = ((simState.portfolioValue - config.initialCapital) / config.initialCapital) * 100;
-    const winCount = allClosedTrades.filter((t) => t.result === "win").length;
-    const lossCount = allClosedTrades.filter((t) => t.result === "loss").length;
-    const winRate = allClosedTrades.length > 0 ? ((winCount / allClosedTrades.length) * 100).toFixed(0) : "N/A";
-    allLogs.push({
-      id: uid(),
-      timestamp: Date.now(),
-      type: "info" as const,
-      message: `📊 Résumé journalier — Portfolio: $${simState.portfolioValue.toFixed(2)} (${totalPnlPct >= 0 ? "+" : ""}${totalPnlPct.toFixed(2)}%) — ${allClosedTrades.length} trades — ${winCount}W/${lossCount}L (${winRate}% WR)`,
-    });
-
-    // Save everything to Redis
-    const newHistory = [...history, ...allClosedTrades];
-    const newCurve = [...curve, ...allCurvePoints];
-    const newLogs = [...logs, ...allLogs];
+    // ---- Save to Redis ----
+    const newHistory = [...history, ...closedTrades];
+    const newCurve = [...curve, ...curvePoints];
+    // Trim logs to MAX_LOGS
+    const allLogs = [...existingLogs, ...newLogs].slice(-MAX_LOGS);
 
     await Promise.all([
-      saveStateRedis(simState),
-      savePositionsRedis(simPositions),
+      saveStateRedis(state),
+      savePositionsRedis(positions),
       saveHistoryRedis(newHistory),
       saveCurveRedis(newCurve),
-      saveLogsRedis(newLogs),
+      saveLogsRedis(allLogs),
     ]);
 
     return Response.json({
       status: "ok",
-      engine: "v2-advanced",
-      hoursSimulated: maxCandles - Math.max(0, maxCandles - 24),
-      portfolioValue: simState.portfolioValue,
-      openPositions: simPositions.length,
-      closedTrades: allClosedTrades.length,
-      wins: winCount,
-      losses: lossCount,
-      winRate,
-      drawdown: simState.currentDrawdown.toFixed(2),
-      running: simState.running,
-      enrichedData: {
-        onChain: !!enrichedData.onChain,
-        sentiment: !!enrichedData.sentiment,
-        liquidation: Object.keys(enrichedData.liquidation).length,
-        multiTF: Object.keys(enrichedData.multiTF).length,
-      },
+      engine: "v3-realtime",
+      portfolioValue: state.portfolioValue,
+      openPositions: positions.length,
+      closedTrades: closedTrades.length,
+      newLogs: newLogs.length,
+      drawdown: state.currentDrawdown.toFixed(2),
+      running: state.running,
     });
   } catch (err) {
-    console.error("Bot daily cron error:", err);
+    console.error("Bot cron error:", err);
     return Response.json(
       { status: "error", error: err instanceof Error ? err.message : String(err) },
       { status: 500 },
