@@ -20,10 +20,6 @@ interface FngEntry {
 const REDIS_CACHE_KEY = "axiom:cache:market-overview";
 const REDIS_CACHE_TTL = 45;
 
-function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
 async function fetchFresh<T>(url: string, timeoutMs = 6000): Promise<T | null> {
   try {
     const controller = new AbortController();
@@ -104,7 +100,7 @@ export async function GET() {
         }
       }
       try {
-        await redis.set("axiom:cache:sparklines", JSON.stringify(sparklines), { ex: 300 });
+        await redis.set("axiom:cache:sparklines", sparklines, { ex: 300 });
       } catch { /* non-critical */ }
     }
   }
@@ -203,7 +199,7 @@ export async function GET() {
 
   // Cache
   try {
-    await redis.set(REDIS_CACHE_KEY, JSON.stringify({ data: result, ts: Date.now() }), { ex: REDIS_CACHE_TTL * 3 });
+    await redis.set(REDIS_CACHE_KEY, { data: result, ts: Date.now() }, { ex: REDIS_CACHE_TTL * 3 });
   } catch { /* non-critical */ }
 
   return Response.json(result);

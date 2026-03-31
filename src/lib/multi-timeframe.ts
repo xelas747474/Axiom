@@ -190,7 +190,7 @@ export async function getMultiTimeframeData(coinId: string): Promise<MultiTimefr
   };
 
   try {
-    await redis.set(cacheKey, JSON.stringify(data), { ex: CACHE_TTL });
+    await redis.set(cacheKey, data, { ex: CACHE_TTL });
   } catch { /* non-critical */ }
 
   return data;

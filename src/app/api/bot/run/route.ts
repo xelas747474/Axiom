@@ -68,26 +68,37 @@ function applySpreadSlip(price: number, direction: TradeDirection, isEntry: bool
 
 // ---- Fetch hourly candles from Binance (for technical scoring) ----
 
+const BINANCE_ENDPOINTS = [
+  "https://api.binance.com/api/v3",
+  "https://api1.binance.com/api/v3",
+  "https://api2.binance.com/api/v3",
+  "https://api3.binance.com/api/v3",
+  "https://api.binance.us/api/v3",
+];
+
 async function fetchHourlyCandles(symbol: string, hours: number = 120): Promise<OHLCV[]> {
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 8000);
-    const url = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=1h&limit=${hours}`;
-    const res = await fetch(url, { signal: controller.signal, cache: "no-store" });
-    clearTimeout(timeoutId);
-    if (!res.ok) return [];
-    const raw: unknown[][] = await res.json();
-    return raw.map((k) => ({
-      time: Math.floor((k[0] as number) / 1000),
-      open: parseFloat(k[1] as string),
-      high: parseFloat(k[2] as string),
-      low: parseFloat(k[3] as string),
-      close: parseFloat(k[4] as string),
-      volume: parseFloat(k[5] as string),
-    }));
-  } catch {
-    return [];
+  for (const base of BINANCE_ENDPOINTS) {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 8000);
+      const url = `${base}/klines?symbol=${symbol}&interval=1h&limit=${hours}`;
+      const res = await fetch(url, { signal: controller.signal, cache: "no-store" });
+      clearTimeout(timeoutId);
+      if (!res.ok) continue;
+      const raw: unknown[][] = await res.json();
+      return raw.map((k) => ({
+        time: Math.floor((k[0] as number) / 1000),
+        open: parseFloat(k[1] as string),
+        high: parseFloat(k[2] as string),
+        low: parseFloat(k[3] as string),
+        close: parseFloat(k[4] as string),
+        volume: parseFloat(k[5] as string),
+      }));
+    } catch {
+      continue;
+    }
   }
+  return [];
 }
 
 // ---- Enriched data (cached in Redis 5min, shared across runs) ----

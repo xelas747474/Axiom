@@ -1,6 +1,6 @@
 // ============================================
 // GET /api/market/ohlcv — Historical OHLCV data
-// Primary: Binance via market-data.ts
+// Primary: Binance (multi-endpoint) via market-data.ts | Fallback: CoinGecko
 // Used by: backtest engine, trading charts
 // ============================================
 
@@ -37,42 +37,49 @@ export async function GET(request: Request) {
   }
   if (!symbol) symbol = "BTC";
 
+  const days = parseInt(searchParams.get("days") || "0", 10);
+  const interval = searchParams.get("interval") as BinanceInterval | null;
+  const limit = parseInt(searchParams.get("limit") || "200", 10);
+
+  console.log(`[ohlcv] Request: symbol=${symbol}, days=${days}, interval=${interval}, limit=${limit}, raw_crypto=${crypto}`);
+
   // Validate symbol exists
   if (!SYMBOLS[symbol]) {
+    console.error(`[ohlcv] Unknown symbol: ${symbol}`);
     return Response.json(
       { error: `Unknown symbol: ${symbol}. Valid: ${Object.keys(SYMBOLS).join(", ")}` },
       { status: 400 }
     );
   }
 
-  const days = parseInt(searchParams.get("days") || "0", 10);
-  const interval = searchParams.get("interval") as BinanceInterval | null;
-  const limit = parseInt(searchParams.get("limit") || "200", 10);
-
   try {
     let data;
 
     if (days > 0) {
       // Historical mode for backtest
+      console.log(`[ohlcv] Fetching historical: ${symbol} / ${days} days`);
       data = await getHistoricalOHLCV(symbol, days);
+      console.log(`[ohlcv] Historical result: ${data?.length ?? 0} candles`);
     } else if (interval) {
       // Chart mode with specific interval
+      console.log(`[ohlcv] Fetching chart: ${symbol} / ${interval} / ${limit}`);
       data = await getOHLCV(symbol, interval, limit);
+      console.log(`[ohlcv] Chart result: ${data?.length ?? 0} candles`);
     } else {
       // Default: 1h candles, 200 points
       data = await getOHLCV(symbol, "1h", 200);
+      console.log(`[ohlcv] Default result: ${data?.length ?? 0} candles`);
     }
 
     if (!data || data.length === 0) {
+      console.error(`[ohlcv] No data returned for ${symbol}/${days}d from any source`);
       return Response.json(
-        { error: "Aucune donnée disponible pour cette crypto/période" },
+        { error: `Aucune donnée disponible pour ${symbol} — Binance et CoinGecko ont échoué`, symbol, days },
         { status: 502 }
       );
     }
 
     // Return in both formats for backward compatibility
-    // Old format: { data: [...], crypto, days, count }
-    // New format: direct array
     if (days > 0) {
       return Response.json({
         crypto: crypto || symbol,
@@ -86,8 +93,10 @@ export async function GET(request: Request) {
 
     return Response.json(data);
   } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    console.error(`[ohlcv] Exception for ${symbol}/${days}d: ${errMsg}`);
     return Response.json(
-      { error: err instanceof Error ? err.message : "Erreur de récupération des données" },
+      { error: errMsg, symbol, days },
       { status: 500 }
     );
   }

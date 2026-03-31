@@ -1,12 +1,52 @@
 // ============================================
 // Binance Public API Client — FREE, no API key required
 // Primary data source for AXIOM (faster + no rate limit issues)
+// Tries multiple Binance endpoints for resilience (some are geo-blocked on Vercel)
 // Preserves original fetchOHLCV / fetchCurrentPrice exports for trading page
 // ============================================
 
 import { type OHLCV, type CryptoSymbol, TIMEFRAMES, type TimeframeLabel } from "./indicators/types";
 
-const BASE_URL = "https://api.binance.com/api/v3";
+// Multiple Binance API endpoints — try in order
+// api.binance.com is the primary, but often blocked from US-based serverless (Vercel/AWS)
+// api1/api2/api3 are mirrors, api.binance.us is the US-specific endpoint
+const BINANCE_ENDPOINTS = [
+  "https://api.binance.com/api/v3",
+  "https://api1.binance.com/api/v3",
+  "https://api2.binance.com/api/v3",
+  "https://api3.binance.com/api/v3",
+  "https://api.binance.us/api/v3",
+];
+
+// ============================================
+// RESILIENT FETCH — tries each endpoint until one works
+// ============================================
+
+async function binanceFetch(path: string, timeoutMs = 8000): Promise<Response | null> {
+  for (const base of BINANCE_ENDPOINTS) {
+    const url = `${base}${path}`;
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+      const res = await fetch(url, {
+        signal: controller.signal,
+        cache: "no-store",
+        headers: { Accept: "application/json" },
+      });
+      clearTimeout(timeoutId);
+
+      if (res.ok) {
+        console.log(`[binance] OK: ${url}`);
+        return res;
+      }
+      console.warn(`[binance] ${res.status} from ${base} — trying next`);
+    } catch (err) {
+      console.warn(`[binance] Failed ${base}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  console.error(`[binance] All endpoints failed for ${path}`);
+  return null;
+}
 
 // ============================================
 // SYMBOL MAPS
@@ -75,19 +115,13 @@ export type BinanceInterval = "1m" | "5m" | "15m" | "1h" | "4h" | "1d" | "1w";
 export async function getBinancePrice(
   symbol: string
 ): Promise<{ price: number; change24h: number } | null> {
+  const ticker = SYMBOLS[symbol];
+  if (!ticker) return null;
+
+  const res = await binanceFetch(`/ticker/24hr?symbol=${ticker}`, 5000);
+  if (!res) return null;
+
   try {
-    const ticker = SYMBOLS[symbol];
-    if (!ticker) return null;
-
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000);
-    const res = await fetch(`${BASE_URL}/ticker/24hr?symbol=${ticker}`, {
-      signal: controller.signal,
-      cache: "no-store",
-    });
-    clearTimeout(timeoutId);
-    if (!res.ok) return null;
-
     const data = await res.json();
     return {
       price: parseFloat(data.lastPrice),
@@ -103,16 +137,10 @@ export async function getBinancePrice(
 // ============================================
 
 export async function getAllBinancePrices(): Promise<Record<string, TickerData>> {
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 8000);
-    const res = await fetch(`${BASE_URL}/ticker/24hr`, {
-      signal: controller.signal,
-      cache: "no-store",
-    });
-    clearTimeout(timeoutId);
-    if (!res.ok) throw new Error("Binance ticker error");
+  const res = await binanceFetch("/ticker/24hr", 10000);
+  if (!res) return {};
 
+  try {
     const allTickers: Array<{
       symbol: string;
       lastPrice: string;
@@ -152,19 +180,16 @@ export async function getBinanceOHLCV(
   interval: BinanceInterval = "1h",
   limit: number = 500
 ): Promise<OHLCVCandle[] | null> {
+  const ticker = SYMBOLS[symbol];
+  if (!ticker) return null;
+
+  const res = await binanceFetch(
+    `/klines?symbol=${ticker}&interval=${interval}&limit=${Math.min(limit, 1000)}`,
+    10000
+  );
+  if (!res) return null;
+
   try {
-    const ticker = SYMBOLS[symbol];
-    if (!ticker) return null;
-
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 8000);
-    const res = await fetch(
-      `${BASE_URL}/klines?symbol=${ticker}&interval=${interval}&limit=${Math.min(limit, 1000)}`,
-      { signal: controller.signal, cache: "no-store" }
-    );
-    clearTimeout(timeoutId);
-    if (!res.ok) return null;
-
     const data: unknown[][] = await res.json();
     return data.map((c) => ({
       timestamp: c[0] as number,
@@ -203,16 +228,13 @@ export async function getBinanceHistoricalOHLCV(
 
   while (remaining > 0) {
     const limit = Math.min(batchSize, remaining);
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000);
-      const res = await fetch(
-        `${BASE_URL}/klines?symbol=${ticker}&interval=${interval}&limit=${limit}&endTime=${endTime}`,
-        { signal: controller.signal, cache: "no-store" }
-      );
-      clearTimeout(timeoutId);
-      if (!res.ok) break;
+    const res = await binanceFetch(
+      `/klines?symbol=${ticker}&interval=${interval}&limit=${limit}&endTime=${endTime}`,
+      12000
+    );
+    if (!res) break;
 
+    try {
       const data: unknown[][] = await res.json();
       if (data.length === 0) break;
 
@@ -268,21 +290,13 @@ export async function fetchOHLCV(
     return cached.data;
   }
 
+  const res = await binanceFetch(`/klines?symbol=${symbol}&interval=${tf.interval}&limit=${limit}`, 8000);
+  if (!res) {
+    if (cached) return cached.data;
+    throw new Error("All Binance endpoints failed");
+  }
+
   try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 8000);
-    const url = `${BASE_URL}/klines?symbol=${symbol}&interval=${tf.interval}&limit=${limit}`;
-    const res = await fetch(url, {
-      signal: controller.signal,
-      headers: { Accept: "application/json" },
-    });
-    clearTimeout(timeoutId);
-
-    if (!res.ok) {
-      if (cached) return cached.data;
-      throw new Error(`Binance API error: ${res.status}`);
-    }
-
     const raw: unknown[][] = await res.json();
     const data: OHLCV[] = raw.map((k) => ({
       time: Math.floor((k[0] as number) / 1000),
@@ -303,9 +317,10 @@ export async function fetchOHLCV(
 
 /** Original fetchCurrentPrice for trading page */
 export async function fetchCurrentPrice(symbol: CryptoSymbol): Promise<number> {
+  const res = await binanceFetch(`/ticker/price?symbol=${symbol}`, 5000);
+  if (!res) return 0;
+
   try {
-    const res = await fetch(`${BASE_URL}/ticker/price?symbol=${symbol}`);
-    if (!res.ok) return 0;
     const data: { price: string } = await res.json();
     return parseFloat(data.price);
   } catch {

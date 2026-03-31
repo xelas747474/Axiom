@@ -139,7 +139,7 @@ async function fetchAndCacheSparklines(redis: ReturnType<typeof getRedis>) {
     }
 
     if (Object.keys(sparklines).length > 0) {
-      await redis.set(SPARKLINE_CACHE_KEY, JSON.stringify(sparklines), { ex: SPARKLINE_TTL });
+      await redis.set(SPARKLINE_CACHE_KEY, sparklines, { ex: SPARKLINE_TTL });
     }
   } catch { /* non-critical */ }
 }
