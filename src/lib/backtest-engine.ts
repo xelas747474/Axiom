@@ -128,16 +128,30 @@ function computeScore(data: OHLCVCandle[], index: number): { score: number; conf
   let totalScore = 0;
   let components = 0;
 
-  // RSI
+  // RSI + RSI crossover signals (backtest-only: detect 30/70 crosses)
   const rsi = calculateRSI(closes, 14);
+  const prevRsi = closes.length > 15 ? calculateRSI(closes.slice(0, -1), 14) : rsi;
   let rsiScore = 0;
   if (rsi < 30) rsiScore = 60;
   else if (rsi < 40) rsiScore = 30;
   else if (rsi < 60) rsiScore = 0;
   else if (rsi < 70) rsiScore = -30;
   else rsiScore = -60;
+  // RSI crossovers (strong signals, additive outside the average)
+  if (prevRsi < 30 && rsi >= 30) rsiScore += 30; // bullish cross up from oversold
+  if (prevRsi > 70 && rsi <= 70) rsiScore -= 30; // bearish cross down from overbought
   totalScore += rsiScore;
   components++;
+
+  // Short-term price-action signals (6-bar ROC)
+  if (closes.length >= 7) {
+    const roc6 = ((currentPrice - closes[closes.length - 7]) / closes[closes.length - 7]) * 100;
+    let paScore = 0;
+    if (roc6 < -2) paScore = 20;   // potential rebound signal
+    else if (roc6 > 2) paScore = 15; // continuation signal
+    totalScore += paScore;
+    components++;
+  }
 
   // SMA crossover
   const sma20 = calculateSMA(closes, 20);
@@ -208,10 +222,12 @@ function computeScore(data: OHLCVCandle[], index: number): { score: number; conf
 }
 
 // ---- Strategy params ----
+// Backtest-only thresholds (calibrated against historical averaged scores,
+// independent of live bot thresholds).
 const STRATEGY_PARAMS: Record<string, { threshold: number; slPct: number; tpPct: number; sizePct: number }> = {
-  conservative: { threshold: 60, slPct: 1.5, tpPct: 2.5, sizePct: 10 },
-  balanced: { threshold: 35, slPct: 2.5, tpPct: 4.0, sizePct: 15 },
-  aggressive: { threshold: 20, slPct: 4.0, tpPct: 6.0, sizePct: 25 },
+  conservative: { threshold: 25, slPct: 1.5, tpPct: 2.5, sizePct: 10 },
+  balanced: { threshold: 15, slPct: 2.5, tpPct: 4.0, sizePct: 15 },
+  aggressive: { threshold: 8, slPct: 4.0, tpPct: 6.0, sizePct: 25 },
 };
 
 interface OpenPos {
@@ -253,6 +269,9 @@ export function runBacktestAsync(
 
     const totalPoints = ohlcData.length;
     let currentIdx = 20; // start after enough lookback
+    let signalsAboveThreshold = 0;
+    let signalsTotal = 0;
+    console.log(`[backtest] strategy=${config.strategy} threshold=${strat.threshold} totalCandles=${totalPoints} processing from idx=20`);
 
     function processChunk() {
       try {
@@ -342,6 +361,8 @@ export function runBacktestAsync(
           // Evaluate new entries
           const { score } = computeScore(ohlcData, i);
           const absScore = Math.abs(score);
+          signalsTotal++;
+          if (absScore >= strat.threshold) signalsAboveThreshold++;
 
           if (absScore >= strat.threshold && openPositions.length < 3) {
             const cooldownMs = 15 * 60000;
@@ -463,6 +484,7 @@ export function runBacktestAsync(
           }
 
           onProgress(100);
+          console.log(`[backtest] done strategy=${config.strategy} candlesProcessed=${Math.min(currentIdx, totalPoints)}/${totalPoints} scoresEvaluated=${signalsTotal} scoresAboveThreshold(${strat.threshold})=${signalsAboveThreshold} trades=${trades.length}`);
           resolve(computeStats(trades, curve, capital, maxDrawdown));
         } else {
           setTimeout(processChunk, 0);
