@@ -16,6 +16,7 @@ import BacktestPanel from "@/components/bot/BacktestPanel";
 import BacktestResults from "@/components/bot/BacktestResults";
 import StrategyComparison from "@/components/bot/StrategyComparison";
 import ExportButton from "@/components/bot/ExportButton";
+import TradingModeSelector from "@/components/bot/TradingModeSelector";
 import type { BacktestResult } from "@/components/bot/BacktestPanel";
 
 // ============================================
@@ -128,10 +129,13 @@ function TabBar({ active, onChange }: { active: TabKey; onChange: (tab: TabKey) 
   );
 }
 
-function DashboardTab({ isAdmin }: { isAdmin: boolean }) {
+function DashboardTab({ isAdmin, plan }: { isAdmin: boolean; plan: "free" | "pro" }) {
   return (
     <div className="space-y-6">
       <ErrorBoundary label="Stats"><BotStats /></ErrorBoundary>
+      {isAdmin && plan === "pro" && (
+        <ErrorBoundary label="TradingMode"><TradingModeSelector plan={plan} /></ErrorBoundary>
+      )}
       <ErrorBoundary label="Portfolio"><BotPortfolioChart /></ErrorBoundary>
       <ErrorBoundary label="Config"><BotConfig /></ErrorBoundary>
       <ErrorBoundary label="Positions"><BotPositions /></ErrorBoundary>
@@ -227,6 +231,7 @@ export default function BotPage() {
   }
 
   const isAdmin = user.role === "admin";
+  const plan: "free" | "pro" = user.plan ?? "free";
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 space-y-6">
@@ -237,7 +242,7 @@ export default function BotPage() {
 
       {/* Tab content */}
       <div className="animate-fade-in-up" key={activeTab}>
-        {activeTab === "dashboard" && <DashboardTab isAdmin={isAdmin} />}
+        {activeTab === "dashboard" && <DashboardTab isAdmin={isAdmin} plan={plan} />}
         {activeTab === "backtest" && <BacktestTab />}
         {activeTab === "compare" && <CompareTab />}
         {activeTab === "history" && <HistoryTab />}

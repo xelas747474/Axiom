@@ -3,6 +3,7 @@
 import { useAuth, apiFetch } from "@/lib/auth";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, useCallback } from "react";
+import SecurityLogsPanel from "@/components/SecurityLogsPanel";
 
 interface AdminUser {
   id: string;
@@ -203,6 +204,9 @@ export default function AdminPage() {
             </div>
           )}
         </div>
+
+        {/* Security logs */}
+        <SecurityLogsPanel />
 
         {/* Info */}
         <div className="mt-6 rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-bg-card)] p-4">

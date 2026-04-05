@@ -20,7 +20,11 @@
 
 body {
   font-family: var(--font-inter);
-  background: linear-gradient(135deg, #0a0e1a 0%, #0f172a 50%, #0a0e1a 100%);
+  background:
+    radial-gradient(ellipse at 20% 50%, rgba(59, 130, 246, 0.05) 0%, transparent 50%),
+    radial-gradient(ellipse at 80% 20%, rgba(139, 92, 246, 0.04) 0%, transparent 50%),
+    linear-gradient(160deg, #04060d 0%, #0a1628 40%, #0d1117 100%);
+  background-attachment: fixed;
   color: var(--color-text-primary);
   min-height: 100vh;
 }
@@ -289,4 +293,145 @@ body {
 /* Counter animation helper */
 .tabular-nums {
   font-variant-numeric: tabular-nums;
+}
+
+/* ====== Premium Card System (refonte visuelle) ====== */
+.premium-card {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 16px;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  box-shadow:
+    0 4px 24px rgba(0, 0, 0, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.premium-card:hover {
+  border-color: rgba(59, 130, 246, 0.15);
+  transform: translateY(-2px);
+  box-shadow:
+    0 8px 40px rgba(0, 0, 0, 0.3),
+    0 0 20px rgba(59, 130, 246, 0.06);
+}
+
+/* Colored variants */
+.premium-card-btc {
+  background:
+    radial-gradient(ellipse at top left, rgba(247, 147, 26, 0.08), transparent 60%),
+    rgba(255, 255, 255, 0.02);
+}
+.premium-card-btc:hover {
+  border-color: rgba(247, 147, 26, 0.25);
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.3), 0 0 24px rgba(247, 147, 26, 0.12);
+}
+.premium-card-eth {
+  background:
+    radial-gradient(ellipse at top left, rgba(98, 126, 234, 0.08), transparent 60%),
+    rgba(255, 255, 255, 0.02);
+}
+.premium-card-eth:hover {
+  border-color: rgba(98, 126, 234, 0.25);
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.3), 0 0 24px rgba(98, 126, 234, 0.12);
+}
+.premium-card-sol {
+  background:
+    radial-gradient(ellipse at top left, rgba(20, 241, 149, 0.08), transparent 60%),
+    rgba(255, 255, 255, 0.02);
+}
+.premium-card-sol:hover {
+  border-color: rgba(20, 241, 149, 0.25);
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.3), 0 0 24px rgba(20, 241, 149, 0.12);
+}
+
+/* P&L accent bars */
+.premium-card-positive {
+  border-left: 3px solid rgba(34, 197, 94, 0.6);
+  background:
+    linear-gradient(90deg, rgba(34, 197, 94, 0.05), transparent 30%),
+    rgba(255, 255, 255, 0.02);
+}
+.premium-card-negative {
+  border-left: 3px solid rgba(239, 68, 68, 0.6);
+  background:
+    linear-gradient(90deg, rgba(239, 68, 68, 0.05), transparent 30%),
+    rgba(255, 255, 255, 0.02);
+}
+
+/* Primary button */
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  min-height: 44px;
+  padding: 0 1.25rem;
+  border-radius: 10px;
+  font-weight: 600;
+  color: white;
+  background: linear-gradient(135deg, #3b82f6, #6366f1);
+  box-shadow:
+    0 4px 15px rgba(59, 130, 246, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  transition: all 0.3s;
+  border: none;
+  cursor: pointer;
+}
+.btn-primary:hover:not(:disabled) {
+  box-shadow:
+    0 6px 25px rgba(59, 130, 246, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.15);
+  transform: translateY(-1px);
+}
+.btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-danger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  min-height: 44px;
+  padding: 0 1.25rem;
+  border-radius: 10px;
+  font-weight: 600;
+  color: white;
+  background: linear-gradient(135deg, #ef4444, #b91c1c);
+  box-shadow: 0 4px 15px rgba(239, 68, 68, 0.3);
+  transition: all 0.3s;
+  border: none;
+  cursor: pointer;
+}
+.btn-danger:hover:not(:disabled) {
+  box-shadow: 0 6px 25px rgba(239, 68, 68, 0.4);
+  transform: translateY(-1px);
+}
+
+/* Live dot */
+.live-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #22c55e;
+  box-shadow: 0 0 8px rgba(34, 197, 94, 0.6);
+  animation: live-pulse 2s ease-in-out infinite;
+}
+
+/* Real-mode banner (trading réel) */
+@keyframes banner-pulse {
+  0%, 100% { background: rgba(239, 68, 68, 0.12); }
+  50% { background: rgba(239, 68, 68, 0.22); }
+}
+.real-mode-banner {
+  animation: banner-pulse 2s ease-in-out infinite;
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  color: #fca5a5;
+}
+
+/* Mobile nav tap targets */
+@media (max-width: 768px) {
+  button, .btn, .btn-primary, .btn-danger { min-height: 44px; }
 }

@@ -3,8 +3,12 @@
 import { useState } from "react";
 import Card from "@/components/Card";
 import Button from "@/components/Button";
+import BinanceKeysCard from "@/components/BinanceKeysCard";
+import { useAuth } from "@/lib/auth";
 
 export default function SettingsPage() {
+  const { user } = useAuth();
+  const plan: "free" | "pro" = user?.plan ?? "free";
   const [tradingMode, setTradingMode] = useState<"simulation" | "real">(
     "simulation"
   );
@@ -20,48 +24,8 @@ export default function SettingsPage() {
         </p>
       </section>
 
-      {/* API Configuration */}
-      <Card className="animate-fade-in-up" key="api">
-        <h2 className="text-lg font-bold text-white mb-6 flex items-center gap-2">
-          <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-[var(--color-accent-blue)]/10 text-sm">🔑</span>
-          API Configuration
-        </h2>
-        <div className="space-y-5">
-          <div>
-            <label className="block text-sm font-medium text-[var(--color-text-secondary)] mb-2">
-              API Key
-            </label>
-            <input
-              type="password"
-              placeholder="Entrez votre clé API"
-              className="w-full rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-bg-primary)] px-4 py-3 text-sm text-white placeholder:text-[var(--color-text-muted)] transition-all duration-300 focus:border-[var(--color-accent-blue)] focus:outline-none focus:ring-1 focus:ring-[var(--color-accent-blue)] focus:shadow-lg focus:shadow-[var(--color-accent-blue)]/10"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-[var(--color-text-secondary)] mb-2">
-              API Secret
-            </label>
-            <input
-              type="password"
-              placeholder="Entrez votre secret API"
-              className="w-full rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-bg-primary)] px-4 py-3 text-sm text-white placeholder:text-[var(--color-text-muted)] transition-all duration-300 focus:border-[var(--color-accent-blue)] focus:outline-none focus:ring-1 focus:ring-[var(--color-accent-blue)] focus:shadow-lg focus:shadow-[var(--color-accent-blue)]/10"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-[var(--color-text-secondary)] mb-2">
-              Adresse IP autorisée
-            </label>
-            <input
-              type="text"
-              placeholder="ex: 192.168.1.1"
-              className="w-full rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-bg-primary)] px-4 py-3 text-sm text-white placeholder:text-[var(--color-text-muted)] transition-all duration-300 focus:border-[var(--color-accent-blue)] focus:outline-none focus:ring-1 focus:ring-[var(--color-accent-blue)] focus:shadow-lg focus:shadow-[var(--color-accent-blue)]/10"
-            />
-          </div>
-          <Button variant="primary" size="md">
-            Sauvegarder
-          </Button>
-        </div>
-      </Card>
+      {/* Binance API — Pro only */}
+      <BinanceKeysCard plan={plan} />
 
       {/* Risk Management */}
       <Card className="animate-fade-in-up" key="risk">
