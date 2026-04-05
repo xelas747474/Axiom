@@ -6,6 +6,7 @@
 
 import { verifyToken } from "@/lib/auth-server";
 import { getRedis, REDIS_KEYS } from "@/lib/redis";
+import { getHistoricalOHLCV } from "@/lib/market-data";
 import type {
   BotConfig,
   BotState,
@@ -54,58 +55,12 @@ function roundPrice(price: number): number {
   return Math.round(price * 100) / 100;
 }
 
-const DELAY_BETWEEN_CG = 1500;
-const RETRY_DELAY = 2000;
+// ---- Fetch historical prices via Binance (market-data.ts) ----
+// Converts OHLCV candles to PricePoint[] format for history generation
 
-function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-async function fetchOnce(coinId: string, days: number): Promise<PricePoint[]> {
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 8000);
-    const res = await fetch(
-      `https://api.coingecko.com/api/v3/coins/${coinId}/market_chart?vs_currency=usd&days=${days}&interval=hourly`,
-      { signal: controller.signal, cache: "no-store" },
-    );
-    clearTimeout(timeoutId);
-    if (!res.ok) return [];
-    const data = await res.json();
-    return (data.prices ?? []).map(([t, p]: [number, number]) => ({ t, p }));
-  } catch {
-    return [];
-  }
-}
-
-// Sequential fetch with Redis cache + retry
-async function fetchHistoricalPrices(coinId: string, days: number): Promise<PricePoint[]> {
-  const redis = getRedis();
-  const cacheKey = `axiom:cache:hist:${coinId}:${days}d`;
-
-  // Check Redis cache (60s TTL)
-  try {
-    const cached = await redis.get<PricePoint[]>(cacheKey);
-    if (cached && Array.isArray(cached) && cached.length > 0) return cached;
-  } catch { /* continue */ }
-
-  // First attempt
-  let result = await fetchOnce(coinId, days);
-
-  // Retry once after 2s if failed
-  if (result.length === 0) {
-    await sleep(RETRY_DELAY);
-    result = await fetchOnce(coinId, days);
-  }
-
-  // Cache on success
-  if (result.length > 0) {
-    try {
-      await redis.set(cacheKey, JSON.stringify(result), { ex: 60 });
-    } catch { /* non-critical */ }
-  }
-
-  return result;
+async function fetchHistoricalPricesBinance(symbol: string, days: number): Promise<PricePoint[]> {
+  const candles = await getHistoricalOHLCV(symbol, days);
+  return candles.map((c) => ({ t: c.timestamp, p: c.close }));
 }
 
 function generateHistoryFromPrices(
@@ -245,13 +200,13 @@ export async function POST(request: Request) {
     const seedString = `${payload.userId}:${config.strategy}:${config.initialCapital}`;
     const rng = createSeededRng(seedString);
 
-    // Fetch REAL historical prices from CoinGecko (7 days hourly)
-    // Sequential with 1.5s delay to avoid rate-limiting
-    const btcPrices = await fetchHistoricalPrices("bitcoin", 7);
-    await sleep(DELAY_BETWEEN_CG);
-    const ethPrices = await fetchHistoricalPrices("ethereum", 7);
-    await sleep(DELAY_BETWEEN_CG);
-    const solPrices = await fetchHistoricalPrices("solana", 7);
+    // Fetch REAL historical prices from Binance (7 days)
+    // Parallel — Binance has no per-IP rate limit concerns for klines
+    const [btcPrices, ethPrices, solPrices] = await Promise.all([
+      fetchHistoricalPricesBinance("BTC", 7),
+      fetchHistoricalPricesBinance("ETH", 7),
+      fetchHistoricalPricesBinance("SOL", 7),
+    ]);
 
     const priceHistory: Record<string, PricePoint[]> = {
       bitcoin: btcPrices,
@@ -288,7 +243,7 @@ export async function POST(request: Request) {
         id: logId(),
         timestamp: Date.now(),
         type: "info",
-        message: `🔄 Historique réinitialisé avec ${trades.length} trades basés sur les vrais prix CoinGecko des 7 derniers jours`,
+        message: `🔄 Historique réinitialisé avec ${trades.length} trades basés sur les vrais prix Binance des 7 derniers jours`,
       },
       {
         id: logId(),
@@ -300,11 +255,11 @@ export async function POST(request: Request) {
 
     // Save everything to Redis
     await Promise.all([
-      redis.set(REDIS_KEYS.botState, JSON.stringify(newState)),
-      redis.set(REDIS_KEYS.botPositions, JSON.stringify([])),
-      redis.set(REDIS_KEYS.botHistory, JSON.stringify(trades)),
-      redis.set(REDIS_KEYS.botCurve, JSON.stringify(curve)),
-      redis.set(REDIS_KEYS.botLogs, JSON.stringify(logs)),
+      redis.set(REDIS_KEYS.botState, newState),
+      redis.set(REDIS_KEYS.botPositions, []),
+      redis.set(REDIS_KEYS.botHistory, trades),
+      redis.set(REDIS_KEYS.botCurve, curve),
+      redis.set(REDIS_KEYS.botLogs, logs),
     ]);
 
     return Response.json({
