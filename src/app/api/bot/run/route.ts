@@ -340,12 +340,13 @@ export async function GET(request: Request) {
       });
     }
 
-    // ---- Update portfolio value ----
-    const positionsPnl = positions.reduce((sum, p) => sum + p.pnl, 0);
-    const closedPnl = closedTrades.reduce((sum, t) => sum + t.pnl, 0);
-    const capitalInPositions = positions.reduce((sum, p) => sum + p.size, 0);
-    const freeCapital = state.portfolioValue - capitalInPositions + closedPnl;
-    state.portfolioValue = freeCapital + capitalInPositions + positionsPnl;
+    // ---- Recompute portfolio value FROM SCRATCH (stateless, idempotent) ----
+    // Formula: portfolioValue = initialCapital + totalClosedPnL + totalOpenPnL
+    // NEVER accumulate open PnL across ticks — it must be recalculated each run
+    const allHistory = [...history, ...closedTrades];
+    const totalClosedPnL = allHistory.reduce((sum, t) => sum + t.pnl, 0);
+    const totalOpenPnL = positions.reduce((sum, p) => sum + p.pnl, 0);
+    state.portfolioValue = config.initialCapital + totalClosedPnL + totalOpenPnL;
 
     if (state.portfolioValue > state.peakValue) state.peakValue = state.portfolioValue;
     state.currentDrawdown = state.peakValue > 0

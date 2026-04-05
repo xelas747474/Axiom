@@ -75,7 +75,7 @@ function ResetHistoryButton() {
       <div className="flex items-center justify-between gap-4">
         <div>
           <p className="text-sm font-semibold text-orange-400">Réinitialiser l&apos;historique</p>
-          <p className="text-xs text-gray-400 mt-0.5">Régénère les trades avec les vrais prix CoinGecko des 7 derniers jours</p>
+          <p className="text-xs text-gray-400 mt-0.5">Régénère les trades avec les vrais prix Binance des 7 derniers jours</p>
         </div>
         <button
           onClick={handleReset}

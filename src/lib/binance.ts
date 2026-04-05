@@ -39,12 +39,12 @@ async function binanceFetch(path: string, timeoutMs = 8000): Promise<Response | 
         console.log(`[binance] OK: ${url}`);
         return res;
       }
-      console.warn(`[binance] ${res.status} from ${base} — trying next`);
+      console.error(`[binance] HTTP ${res.status} from ${url} — trying next endpoint`);
     } catch (err) {
-      console.warn(`[binance] Failed ${base}: ${err instanceof Error ? err.message : String(err)}`);
+      console.error(`[binance] Network error ${url}: ${err instanceof Error ? err.message : String(err)} — trying next endpoint`);
     }
   }
-  console.error(`[binance] All endpoints failed for ${path}`);
+  console.error(`[binance] ALL ENDPOINTS FAILED for path=${path}`);
   return null;
 }
 
