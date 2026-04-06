@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef, Component, Suspense, type ReactNode } from "react";
-import Card from "@/components/Card";
 import MarketHeatmap from "@/components/insights/MarketHeatmap";
 import FearGreedSection from "@/components/insights/FearGreedSection";
 import AIScoreCards from "@/components/insights/AIScoreCards";
@@ -153,32 +152,32 @@ export default function AIInsightsPage() {
           <div className="mt-3 flex justify-center items-center gap-3">
             {data.isLive ? (
               <>
-                <span className="h-2 w-2 rounded-full bg-green-400 animate-pulse" />
-                <span className="text-xs text-green-400 font-medium">Données en direct</span>
+                <span className="live-dot" />
+                <span className="text-xs text-[var(--color-positive)] font-medium">Données en direct</span>
               </>
             ) : (
               <>
-                <span className="h-2 w-2 rounded-full bg-yellow-400" />
-                <span className="text-xs text-yellow-400 font-medium">Données en cache</span>
+                <span className="h-2 w-2 rounded-full bg-[var(--color-warning)]" />
+                <span className="text-xs text-[var(--color-warning)] font-medium">Données en cache</span>
               </>
             )}
-            <span className="text-xs text-gray-500">
+            <span className="text-xs text-[var(--color-text-muted)]">
               Mise à jour : {new Date(data.timestamp).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}
             </span>
           </div>
         )}
         {loading && !data && (
           <div className="mt-4 flex justify-center items-center gap-2">
-            <span className="h-2 w-2 rounded-full bg-blue-400 animate-pulse" />
-            <span className="text-xs text-gray-400">Chargement des données...</span>
+            <span className="h-2 w-2 rounded-full bg-[var(--color-accent-blue)] animate-pulse" />
+            <span className="text-xs text-[var(--color-text-muted)]">Chargement des données...</span>
           </div>
         )}
         {error && !data && (
           <div className="mt-4 flex flex-col items-center gap-2">
-            <span className="text-xs text-red-400">Impossible de charger les données</span>
+            <span className="text-xs text-[var(--color-negative)]">Impossible de charger les données</span>
             <button
               onClick={() => { retryRef.current = 0; setLoading(true); setError(false); fetchData(); }}
-              className="text-xs text-blue-400 underline hover:text-blue-300"
+              className="text-xs text-[var(--color-accent-blue)] underline hover:opacity-80"
             >
               Réessayer
             </button>
@@ -188,17 +187,17 @@ export default function AIInsightsPage() {
 
       {/* ============ AI REPORT ============ */}
       <ErrorBoundary>
-        <Card highlight>
+        <div className="premium-card p-5">
           <Suspense fallback={<SkeletonBlock className="h-[200px]" />}>
             <AIReport />
           </Suspense>
-        </Card>
+        </div>
       </ErrorBoundary>
 
       {/* ============ HEATMAP + FEAR & GREED ============ */}
       <div className="grid gap-6 lg:grid-cols-2">
         <ErrorBoundary>
-          <Card highlight>
+          <div className="premium-card p-5">
             {!data ? (
               <div>
                 <div className="h-6 w-40 rounded bg-white/5 mb-4" />
@@ -209,11 +208,11 @@ export default function AIInsightsPage() {
                 <MarketHeatmap coins={data.heatmapCoins} />
               </Suspense>
             )}
-          </Card>
+          </div>
         </ErrorBoundary>
 
         <ErrorBoundary>
-          <Card highlight>
+          <div className="premium-card p-5">
             {!data ? (
               <div>
                 <div className="h-6 w-64 rounded bg-white/5 mb-4" />
@@ -227,13 +226,13 @@ export default function AIInsightsPage() {
                 />
               </Suspense>
             )}
-          </Card>
+          </div>
         </ErrorBoundary>
       </div>
 
       {/* ============ AI SCORE CARDS ============ */}
       <ErrorBoundary>
-        <Card highlight>
+        <div className="premium-card p-5">
           {!data ? (
             <div>
               <div className="h-6 w-56 rounded bg-white/5 mb-4" />
@@ -246,13 +245,13 @@ export default function AIInsightsPage() {
               <AIScoreCards scores={data.aiScores} />
             </Suspense>
           )}
-        </Card>
+        </div>
       </ErrorBoundary>
 
       {/* ============ RADAR + CORRELATION ============ */}
       <div className="grid gap-6 lg:grid-cols-2">
         <ErrorBoundary>
-          <Card highlight>
+          <div className="premium-card p-5">
             {!data ? (
               <div>
                 <div className="h-6 w-72 rounded bg-white/5 mb-4" />
@@ -269,11 +268,11 @@ export default function AIInsightsPage() {
                 />
               </Suspense>
             )}
-          </Card>
+          </div>
         </ErrorBoundary>
 
         <ErrorBoundary>
-          <Card highlight>
+          <div className="premium-card p-5">
             {!data ? (
               <div>
                 <div className="h-6 w-60 rounded bg-white/5 mb-4" />
@@ -284,13 +283,13 @@ export default function AIInsightsPage() {
                 <CorrelationMatrix coins={data.heatmapCoins} />
               </Suspense>
             )}
-          </Card>
+          </div>
         </ErrorBoundary>
       </div>
 
       {/* ============ EVENTS TIMELINE ============ */}
       <ErrorBoundary>
-        <Card highlight>
+        <div className="premium-card p-5">
           {!data ? (
             <div>
               <div className="h-6 w-64 rounded bg-white/5 mb-4" />
@@ -307,7 +306,7 @@ export default function AIInsightsPage() {
               />
             </Suspense>
           )}
-        </Card>
+        </div>
       </ErrorBoundary>
     </div>
   );

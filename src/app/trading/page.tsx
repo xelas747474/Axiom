@@ -6,6 +6,7 @@ import Card from "@/components/Card";
 import CryptoSelector from "@/components/CryptoSelector";
 import AISignalPanel from "@/components/AISignalPanel";
 import SignalScreener from "@/components/SignalScreener";
+import { AnimatedPrice } from "@/components/AnimatedPrice";
 import { fetchOHLCV } from "@/lib/binance";
 import { computeAISignal } from "@/lib/indicators/scoring";
 import { useAuth } from "@/lib/auth";
@@ -148,7 +149,7 @@ export default function TradingPage() {
             </span>
             Trading Pro
             <span className="flex items-center gap-1.5 text-xs font-normal text-[var(--color-positive)]">
-              <span className="h-1.5 w-1.5 rounded-full bg-[var(--color-positive)] animate-live-pulse" />
+              <span className="live-dot" />
               Live
             </span>
           </h1>
@@ -160,11 +161,13 @@ export default function TradingPage() {
         {/* Price header */}
         <div className="text-right">
           <div className="flex items-center gap-2 justify-end">
-            <span className="text-xs text-[var(--color-text-muted)] uppercase">{selectedCrypto.name}</span>
-            <span className="text-xs text-[var(--color-text-muted)]">{selectedCrypto.label}/USDT</span>
+            <span className="text-xs text-[var(--color-text-muted)] uppercase tracking-wider font-medium">{selectedCrypto.name}</span>
+            <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-white/5 text-[var(--color-text-muted)] font-mono">{selectedCrypto.label}/USDT</span>
           </div>
-          <p className="text-2xl font-bold text-white tabular-nums" style={{ fontFamily: "'JetBrains Mono', monospace" }}>
-            {currentPrice > 0 ? (currentPrice >= 1 ? `$${currentPrice.toLocaleString(undefined, { maximumFractionDigits: 2 })}` : `$${currentPrice.toFixed(6)}`) : "—"}
+          <p className="text-2xl font-bold text-white tabular-nums mt-1 font-mono">
+            {currentPrice > 0 ? (
+              <AnimatedPrice value={currentPrice} decimals={currentPrice >= 1 ? 2 : 6} />
+            ) : "—"}
           </p>
           <p className={`text-sm font-semibold tabular-nums ${priceChange >= 0 ? "text-[var(--color-positive)]" : "text-[var(--color-negative)]"}`}>
             {priceChange >= 0 ? "+" : ""}{priceChange.toFixed(2)}%
@@ -184,17 +187,17 @@ export default function TradingPage() {
       {/* Main content: Chart + Signal Panel */}
       <div className="grid gap-6 lg:grid-cols-[1fr_340px]">
         {/* Chart section */}
-        <Card className="p-0 overflow-hidden animate-fade-in-up" style={{ animationDelay: "150ms" }}>
+        <div className="premium-card p-0 overflow-hidden animate-fade-in-up" style={{ animationDelay: "150ms" }}>
           {/* Timeframe selector */}
-          <div className="flex items-center justify-between border-b border-[var(--color-border-subtle)]/50 px-4 py-2.5">
-            <div className="flex gap-0.5 rounded-lg bg-[var(--color-bg-primary)] p-0.5">
+          <div className="flex items-center justify-between border-b border-white/[0.04] px-4 py-2.5">
+            <div className="flex gap-0.5 rounded-lg bg-black/30 p-0.5">
               {TIMEFRAMES.map((tf) => (
                 <button
                   key={tf.label}
                   onClick={() => { setSelectedTimeframe(tf.label); setLoading(true); }}
                   className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-all duration-200 ${
                     selectedTimeframe === tf.label
-                      ? "bg-[var(--color-bg-card)] text-white shadow-sm"
+                      ? "bg-white/10 text-white shadow-sm"
                       : "text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]"
                   }`}
                 >
@@ -211,9 +214,9 @@ export default function TradingPage() {
           </div>
 
           {/* Chart */}
-          <div className="relative min-h-[500px]">
+          <div className="relative min-h-[500px] bg-[#0a0a0a]">
             {loading && (
-              <div className="absolute inset-0 flex items-center justify-center z-10 bg-[var(--color-bg-card)]/60">
+              <div className="absolute inset-0 flex items-center justify-center z-10 bg-[#0a0a0a]/80 backdrop-blur-sm">
                 <div className="flex flex-col items-center gap-3">
                   <div className="h-8 w-8 animate-spin rounded-full border-2 border-[var(--color-accent-blue)]/30 border-t-[var(--color-accent-blue)]" />
                   <span className="text-xs text-[var(--color-text-muted)]">Chargement {selectedCrypto.label} {selectedTimeframe}...</span>
@@ -240,12 +243,12 @@ export default function TradingPage() {
               />
             )}
           </div>
-        </Card>
+        </div>
 
         {/* AI Signal Panel */}
-        <Card className="animate-fade-in-up h-fit lg:sticky lg:top-24" style={{ animationDelay: "200ms" }}>
+        <div className="premium-card p-5 animate-fade-in-up h-fit lg:sticky lg:top-24" style={{ animationDelay: "200ms" }}>
           <h3 className="text-sm font-bold text-white mb-4 flex items-center gap-2">
-            <span className="flex h-6 w-6 items-center justify-center rounded-lg bg-gradient-to-br from-[var(--color-accent-blue)] to-[var(--color-accent-purple)] text-[10px]">AI</span>
+            <span className="flex h-6 w-6 items-center justify-center rounded-lg bg-gradient-to-br from-[var(--color-accent-blue)] to-[var(--color-accent-purple)] text-[10px] font-bold">AI</span>
             Signal Panel — {selectedCrypto.label}
           </h3>
           {signal ? (
@@ -255,17 +258,17 @@ export default function TradingPage() {
               <div className="h-6 w-6 animate-spin rounded-full border-2 border-[var(--color-accent-blue)]/30 border-t-[var(--color-accent-blue)]" />
             </div>
           )}
-        </Card>
+        </div>
       </div>
 
       {/* Screener */}
       <section className="animate-fade-in-up" style={{ animationDelay: "300ms" }}>
-        <Card>
+        <div className="premium-card p-5">
           <SignalScreener
             signals={screenerSignals}
             onSelect={(s) => { setSelectedSymbol(s as CryptoSymbol); setLoading(true); window.scrollTo({ top: 0, behavior: "smooth" }); }}
           />
-        </Card>
+        </div>
       </section>
     </div>
   );
