@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import Card from "@/components/Card";
 import Button from "@/components/Button";
+import { AnimatedPrice } from "@/components/AnimatedPrice";
 import AISummaryBlock from "@/components/AISummaryBlock";
 import AlertItem from "@/components/AlertItem";
 import ChartContainer from "@/components/ChartContainer";
@@ -62,6 +63,8 @@ export default function Dashboard() {
   const [data, setData] = useState<MarketData | null>(null);
   const [loading, setLoading] = useState(true);
   const [isLive, setIsLive] = useState(false);
+  const [fetchedAt, setFetchedAt] = useState<number>(0);
+  const [nowTick, setNowTick] = useState<number>(Date.now());
 
   useEffect(() => {
     let retryCount = 0;
@@ -79,6 +82,7 @@ export default function Dashboard() {
           const json = await res.json();
           setData(json);
           setIsLive(json.isLive ?? false);
+          setFetchedAt(Date.now());
           retryCount = 0; // Reset on success
         }
       } catch {
@@ -98,8 +102,19 @@ export default function Dashboard() {
       retryCount = 0;
       fetchData();
     }, 30000); // Refresh every 30s
-    return () => clearInterval(interval);
+    const tick = setInterval(() => setNowTick(Date.now()), 5000);
+    return () => {
+      clearInterval(interval);
+      clearInterval(tick);
+    };
   }, []);
+
+  const secondsAgo = fetchedAt > 0 ? Math.max(0, Math.floor((nowTick - fetchedAt) / 1000)) : null;
+  const freshnessLabel =
+    secondsAgo === null ? "—" :
+    secondsAgo < 5 ? "à l'instant" :
+    secondsAgo < 60 ? `il y a ${secondsAgo}s` :
+    `il y a ${Math.floor(secondsAgo / 60)}min`;
 
   // Fallback mock data if API fails
   const fallback: MarketData = {
@@ -194,87 +209,85 @@ export default function Dashboard() {
 
       {/* Section 2: Market Overview */}
       <section id="market-overview" className="animate-fade-in-up scroll-mt-24" style={{ animationDelay: "100ms" }}>
-        <h2 className="text-xl font-bold text-white mb-5 flex items-center gap-2">
-          Market Overview
-          {!loading && (
-            <span className={`flex items-center gap-1.5 text-xs font-normal ${isLive ? "text-[var(--color-positive)]" : "text-[var(--color-text-muted)]"}`}>
-              <span className={`h-1.5 w-1.5 rounded-full ${isLive ? "bg-[var(--color-positive)] animate-live-pulse" : "bg-[var(--color-text-muted)]"}`} />
-              {isLive ? "Live" : "Données démo"}
+        <div className="flex items-end justify-between mb-5 flex-wrap gap-3">
+          <h2 className="text-xl font-bold text-white">Market Overview</h2>
+          <div className="flex items-center gap-3 text-xs">
+            {isLive ? (
+              <span className="flex items-center gap-1.5 text-[var(--color-positive)] font-medium">
+                <span className="live-dot" />
+                Live — {freshnessLabel}
+              </span>
+            ) : (
+              <span className="flex items-center gap-1.5 text-[var(--color-text-muted)]">
+                <span className="h-1.5 w-1.5 rounded-full bg-[var(--color-text-muted)]" />
+                {loading ? "Chargement..." : "Cache"}
+              </span>
+            )}
+            <span className="text-[var(--color-text-muted)]">
+              Source&nbsp;: <span className="text-white/80 font-medium">Binance</span>
             </span>
-          )}
-        </h2>
+          </div>
+        </div>
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5 stagger-children">
-          <Card className="animate-fade-in-up">
-            <p className="text-xs text-[var(--color-text-muted)] uppercase tracking-wider">
-              Bitcoin
-            </p>
+          <div className="premium-card premium-card-btc p-5 animate-fade-in-up">
+            <div className="flex items-center justify-between">
+              <p className="text-xs text-[var(--color-text-muted)] uppercase tracking-wider font-semibold">Bitcoin</p>
+              <span className="text-[10px] font-mono text-[var(--color-text-muted)]">BTC</span>
+            </div>
             <p className="mt-2 text-2xl font-bold text-white tabular-nums">
-              ${d.bitcoin.price.toLocaleString()}
+              <AnimatedPrice value={d.bitcoin.price} />
             </p>
-            <p
-              className={`mt-1 text-sm font-medium ${
+            <div className="mt-2">
+              <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold tabular-nums ${
                 d.bitcoin.change24h >= 0
-                  ? "text-[var(--color-positive)]"
-                  : "text-[var(--color-negative)]"
-              }`}
-            >
-              {d.bitcoin.change24h >= 0 ? "+" : ""}
-              {d.bitcoin.change24h.toFixed(2)}%
-            </p>
-          </Card>
+                  ? "bg-[var(--color-positive)]/15 text-[var(--color-positive)]"
+                  : "bg-[var(--color-negative)]/15 text-[var(--color-negative)]"
+              }`}>
+                {d.bitcoin.change24h >= 0 ? "▲" : "▼"} {Math.abs(d.bitcoin.change24h).toFixed(2)}%
+              </span>
+            </div>
+          </div>
 
-          <Card className="animate-fade-in-up">
-            <p className="text-xs text-[var(--color-text-muted)] uppercase tracking-wider">
-              Ethereum
-            </p>
+          <div className="premium-card premium-card-eth p-5 animate-fade-in-up">
+            <div className="flex items-center justify-between">
+              <p className="text-xs text-[var(--color-text-muted)] uppercase tracking-wider font-semibold">Ethereum</p>
+              <span className="text-[10px] font-mono text-[var(--color-text-muted)]">ETH</span>
+            </div>
             <p className="mt-2 text-2xl font-bold text-white tabular-nums">
-              ${d.ethereum.price.toLocaleString()}
+              <AnimatedPrice value={d.ethereum.price} />
             </p>
-            <p
-              className={`mt-1 text-sm font-medium ${
+            <div className="mt-2">
+              <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold tabular-nums ${
                 d.ethereum.change24h >= 0
-                  ? "text-[var(--color-positive)]"
-                  : "text-[var(--color-negative)]"
-              }`}
-            >
-              {d.ethereum.change24h >= 0 ? "+" : ""}
-              {d.ethereum.change24h.toFixed(2)}%
-            </p>
-          </Card>
+                  ? "bg-[var(--color-positive)]/15 text-[var(--color-positive)]"
+                  : "bg-[var(--color-negative)]/15 text-[var(--color-negative)]"
+              }`}>
+                {d.ethereum.change24h >= 0 ? "▲" : "▼"} {Math.abs(d.ethereum.change24h).toFixed(2)}%
+              </span>
+            </div>
+          </div>
 
-          <Card className="animate-fade-in-up">
-            <p className="text-xs text-[var(--color-text-muted)] uppercase tracking-wider">
-              Market Cap
-            </p>
+          <div className="premium-card p-5 animate-fade-in-up">
+            <p className="text-xs text-[var(--color-text-muted)] uppercase tracking-wider font-semibold">Market Cap</p>
             <p className="mt-2 text-2xl font-bold text-white tabular-nums">
               ${d.marketCap.toFixed(2)}T
             </p>
-            <p className="mt-1 text-sm text-[var(--color-text-muted)]">Total</p>
-          </Card>
+            <p className="mt-2 text-xs text-[var(--color-text-muted)]">Total capitalisation</p>
+          </div>
 
-          <Card className="animate-fade-in-up">
-            <p className="text-xs text-[var(--color-text-muted)] uppercase tracking-wider">
-              BTC Dominance
-            </p>
+          <div className="premium-card p-5 animate-fade-in-up">
+            <p className="text-xs text-[var(--color-text-muted)] uppercase tracking-wider font-semibold">BTC Dominance</p>
             <p className="mt-2 text-2xl font-bold text-white tabular-nums">
               {d.btcDominance.toFixed(1)}%
             </p>
-            <p className="mt-1 text-sm text-[var(--color-accent-blue)]">
-              En hausse
-            </p>
-          </Card>
+            <p className="mt-2 text-xs text-[var(--color-accent-blue)]">En hausse</p>
+          </div>
 
-          <Card className="animate-fade-in-up">
-            <p className="text-xs text-[var(--color-text-muted)] uppercase tracking-wider">
-              Fear & Greed
-            </p>
-            <p className={`mt-2 text-2xl font-bold tabular-nums ${fearGreedColor(fgi)}`}>
-              {fgi}
-            </p>
-            <p className={`mt-1 text-sm ${fearGreedColor(fgi)}`}>
-              {fearGreedLabel(fgi)}
-            </p>
-          </Card>
+          <div className="premium-card p-5 animate-fade-in-up">
+            <p className="text-xs text-[var(--color-text-muted)] uppercase tracking-wider font-semibold">Fear &amp; Greed</p>
+            <p className={`mt-2 text-2xl font-bold tabular-nums ${fearGreedColor(fgi)}`}>{fgi}</p>
+            <p className={`mt-2 text-xs ${fearGreedColor(fgi)}`}>{fearGreedLabel(fgi)}</p>
+          </div>
         </div>
       </section>
 
