@@ -21,6 +21,14 @@ interface PricesResponse {
   fetchedAt: number;
 }
 
+const CACHE_KEY = "axiom_prices_cache";
+
+/**
+ * Stale-while-revalidate prices hook.
+ * 1. Loads cached data from localStorage IMMEDIATELY (no skeleton).
+ * 2. Triggers a background refresh from /api/prices.
+ * 3. Re-fetches every `refreshInterval` ms.
+ */
 export function usePrices(refreshInterval = 15000) {
   const [prices, setPrices] = useState<CoinPrice[] | null>(null);
   const [source, setSource] = useState<string>("loading");
@@ -42,6 +50,12 @@ export function usePrices(refreshInterval = 15000) {
         setPrices(data.coins);
         setSource(data.source);
         setFetchedAt(data.fetchedAt);
+        try {
+          localStorage.setItem(
+            CACHE_KEY,
+            JSON.stringify({ coins: data.coins, fetchedAt: data.fetchedAt, source: data.source })
+          );
+        } catch { /* quota exceeded, ignore */ }
       }
     } catch {
       // Silently fail — keep existing data
@@ -52,6 +66,21 @@ export function usePrices(refreshInterval = 15000) {
 
   useEffect(() => {
     mountedRef.current = true;
+
+    // Instant hydrate from localStorage
+    try {
+      const cached = localStorage.getItem(CACHE_KEY);
+      if (cached) {
+        const parsed = JSON.parse(cached) as { coins: CoinPrice[]; fetchedAt: number; source: string };
+        if (parsed?.coins?.length) {
+          setPrices(parsed.coins);
+          setSource(parsed.source || "cache");
+          setFetchedAt(parsed.fetchedAt || 0);
+          setLoading(false);
+        }
+      }
+    } catch { /* ignore corrupted cache */ }
+
     fetchPrices();
     const interval = setInterval(fetchPrices, refreshInterval);
     return () => {
@@ -60,7 +89,6 @@ export function usePrices(refreshInterval = 15000) {
     };
   }, [fetchPrices, refreshInterval]);
 
-  // Helper to get a specific coin's price
   const getPrice = useCallback(
     (idOrSymbol: string): CoinPrice | undefined => {
       if (!prices) return undefined;
@@ -72,5 +100,7 @@ export function usePrices(refreshInterval = 15000) {
     [prices],
   );
 
-  return { prices, loading, source, fetchedAt, getPrice, refetch: fetchPrices };
+  const isStale = fetchedAt > 0 && Date.now() - fetchedAt > 60_000;
+
+  return { prices, loading, source, fetchedAt, isStale, getPrice, refetch: fetchPrices };
 }

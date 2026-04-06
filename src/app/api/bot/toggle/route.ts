@@ -1,4 +1,5 @@
 import { authenticateRequest } from "@/lib/auth-server";
+import { rateLimit, rateLimitResponse } from "@/lib/rate-limit";
 import {
   loadStateRedis,
   saveStateRedis,
@@ -18,6 +19,10 @@ export const dynamic = "force-dynamic";
 export async function POST(request: Request) {
   const user = await authenticateRequest(request);
   if (!user) return Response.json({ error: "Non authentifié" }, { status: 401 });
+
+  // 10 toggles per hour per user
+  const rl = await rateLimit(user.id, "bot-toggle", 10, 60 * 60);
+  if (!rl.allowed) return rateLimitResponse(rl.resetInSeconds);
 
   try {
     const state = await loadStateRedis();

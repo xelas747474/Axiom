@@ -11,6 +11,7 @@ export interface StoredUser {
   email: string;
   passwordHash: string;
   role: "user" | "admin";
+  plan: "free" | "pro";
   createdAt: string;
   preferences: {
     favoriteCrypto: string;
@@ -158,6 +159,7 @@ export async function createUser(
     email: normalizedEmail,
     passwordHash,
     role: isFirstUser ? "admin" : "user",
+    plan: isFirstUser ? "pro" : "free",
     createdAt: new Date().toISOString(),
     preferences: {
       favoriteCrypto: "BTCUSDT",
@@ -217,6 +219,7 @@ export function sanitizeUser(user: StoredUser) {
     name: user.name,
     email: user.email,
     role: user.role,
+    plan: (user as StoredUser).plan ?? (user.role === "admin" ? "pro" : "free"),
     createdAt: user.createdAt,
     preferences: user.preferences,
   };

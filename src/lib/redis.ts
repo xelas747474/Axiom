@@ -65,4 +65,11 @@ export const REDIS_KEYS = {
 
   // Rate limiting
   rateLimit: (ip: string, route: string) => `axiom:rate:${route}:${ip}`,
+
+  // Binance (encrypted API keys per user)
+  binanceKeys: (userId: string) => `axiom:binance:keys:${userId}`,
+  binanceMode: (userId: string) => `axiom:binance:mode:${userId}`,
+
+  // Security audit log
+  securityLogs: "axiom:security:logs",
 } as const;
