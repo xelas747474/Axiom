@@ -431,7 +431,31 @@ body {
   color: #fca5a5;
 }
 
-/* Mobile nav tap targets */
+/* Mobile responsive adjustments */
 @media (max-width: 768px) {
   button, .btn, .btn-primary, .btn-danger { min-height: 44px; }
+
+  /* Smaller hero text on mobile */
+  .text-4xl { font-size: 1.75rem; }
+  .text-5xl, .text-6xl { font-size: 2rem; }
+
+  /* Full-width premium cards on small screens */
+  .premium-card { padding: 1rem; }
+
+  /* Tighter spacing on mobile */
+  .space-y-12 > :not([hidden]) ~ :not([hidden]) { --tw-space-y-reverse: 0; margin-top: calc(2rem * calc(1 - var(--tw-space-y-reverse))); }
+
+  /* Table horizontal scroll hint */
+  .overflow-x-auto { -webkit-overflow-scrolling: touch; }
+
+  /* Bot logs smaller font on mobile */
+  .font-mono.text-\[11px\] { font-size: 10px; }
+}
+
+@media (max-width: 480px) {
+  /* Stacked market overview cards */
+  .grid-cols-2 { grid-template-columns: 1fr; }
+
+  /* Compact prices */
+  .text-2xl.font-bold.tabular-nums { font-size: 1.25rem; }
 }
